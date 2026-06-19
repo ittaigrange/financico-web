@@ -1,3 +1,8 @@
 node_modules/
 .DS_Store
 Thumbs.db
+
+# Never commit the signed package or signing key
+google play package/
+*.keystore
+signing-key-info.txt
