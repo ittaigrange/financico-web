@@ -1,14 +1,26 @@
 // Financico service worker — caches the app shell so it opens offline.
 // It deliberately ignores POSTs and cross-origin requests, so the entry
 // submission to the Apps Script endpoint always goes straight to the network.
+//
+// Bump CACHE on every shell change so phones drop the stale version.
 
-var CACHE = 'financico-v1';
+var CACHE = 'financico-v2';
 var ASSETS = [
   './',
   './index.html',
+  './styles.css',
+  './app.js',
   './manifest.webmanifest',
+  './income/',
+  './income/index.html',
+  './income/manifest-income.webmanifest',
+  './expense/',
+  './expense/index.html',
+  './expense/manifest-expense.webmanifest',
   './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon-512.png',
+  './icons/icon-192-expense.png',
+  './icons/icon-512-expense.png'
 ];
 
 self.addEventListener('install', function (e) {

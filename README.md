@@ -14,6 +14,18 @@ device and saved to `localStorage`.
 5. Open that URL on your phone. On first run, enter the `/exec` endpoint URL and token
    in the settings panel (gear icon reopens it later). Use **Add to Home Screen** to install.
 
-## Direct links
-- `…/financico-web/?type=expense` → opens the expense form
-- `…/financico-web/?type=income` → opens the income form
+## Installable entry points (Step 3b)
+Two standalone, separately-installable pages — each opens its form directly and
+installs as its own home-screen icon:
+- `…/financico-web/income/` → green "הכנסה" form
+- `…/financico-web/expense/` → blue "הוצאה" form
+
+On each page, use **Add to Home Screen** to get a distinct icon (green / blue).
+The root `…/financico-web/` still works as a chooser fallback. The `?type=income` /
+`?type=expense` query form is also still honored.
+
+## Structure
+- `index.html` (+ `income/`, `expense/` entry pages) are thin shells.
+- `styles.css` + `app.js` hold the shared UI and logic (`app.js` reads its mode from
+  `window.FIN_TYPE`, else `?type=`, else shows the chooser).
+- `sw.js` caches the app shell (GET, same-origin only) — bump `CACHE` on every change.
