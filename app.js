@@ -11,7 +11,11 @@
     '<div class="wrap">',
     '  <header>',
     '    <h1 id="title">Financico</h1>',
-    '    <button class="gear" id="gear" title="הגדרות" aria-label="הגדרות">⚙</button>',
+    '    <div class="hdr-actions">',
+    '      <a class="navbtn" id="nav-home" hidden>בית</a>',
+    '      <a class="navbtn" id="nav-switch" hidden></a>',
+    '      <button class="gear" id="gear" title="הגדרות" aria-label="הגדרות">⚙</button>',
+    '    </div>',
     '  </header>',
     '  <main>',
     '    <section id="chooser" class="chooser hidden">',
@@ -263,12 +267,36 @@
     afterReset: function(){}
   });
 
+  // ---- in-app nav (relative, same-origin, stays standalone/full-screen) ----
+  // Subfolder entry pages (income/ , expense/) sit one level under the chooser,
+  // so home is '../' and the sibling form is '../income|expense/'. At the root
+  // (chooser / ?type=) it's './'. No target=_blank — keeps the installed app full-screen.
+  function setNav(mode){
+    var inSub = !!window.FIN_TYPE;
+    var home = document.getElementById('nav-home');
+    var sw   = document.getElementById('nav-switch');
+    home.setAttribute('href', inSub ? '../' : './');
+    if (mode === 'expense'){
+      home.hidden = false;
+      sw.hidden = false; sw.textContent = 'להכנסה';
+      sw.setAttribute('href', inSub ? '../income/' : './income/');
+    } else if (mode === 'income'){
+      home.hidden = false;
+      sw.hidden = false; sw.textContent = 'להוצאה';
+      sw.setAttribute('href', inSub ? '../expense/' : './expense/');
+    } else { // chooser — already at start, no nav needed
+      home.hidden = true;
+      sw.hidden = true;
+    }
+  }
+
   // ---- routing ----
   function show(which){
     var body = document.body;
     document.getElementById('chooser').classList.add('hidden');
     document.getElementById('form-expense').classList.add('hidden');
     document.getElementById('form-income').classList.add('hidden');
+    setNav(which);
 
     if (which === 'expense'){
       body.className = 'theme-expense';

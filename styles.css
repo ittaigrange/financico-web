@@ -19,6 +19,11 @@ header{
 header h1{font-size:20px;margin:0;font-weight:700}
 .gear{background:rgba(255,255,255,.18);border:0;color:#fff;width:38px;height:38px;
   border-radius:10px;font-size:18px;cursor:pointer}
+.hdr-actions{display:flex;align-items:center;gap:8px}
+.navbtn{display:inline-flex;align-items:center;justify-content:center;height:38px;padding:0 14px;
+  background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:10px;
+  font-size:15px;font-weight:700;text-decoration:none;cursor:pointer;white-space:nowrap}
+.navbtn[hidden]{display:none}
 main{flex:1;padding:18px}
 
 .theme-expense header{background:var(--blue)}
