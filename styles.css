@@ -55,10 +55,12 @@ input.amount{font-size:30px;font-weight:700;text-align:center;letter-spacing:.5p
 .hidden{display:none!important}
 
 .chooser{display:flex;flex-direction:column;gap:16px;padding:8px 0}
-.chooser a{
+.chooser a,.chooser .c-data{
   display:flex;align-items:center;justify-content:center;text-decoration:none;
-  font-size:26px;font-weight:800;color:#fff;height:120px;border-radius:18px
+  font-weight:800;color:#fff;border-radius:18px;border:0;cursor:pointer
 }
+.chooser a{font-size:26px;height:120px}
+.chooser .c-data{font-size:20px;height:64px;background:#475569;font-family:inherit}
 .chooser .c-income{background:var(--green)} .chooser .c-expense{background:var(--blue)}
 .chooser .brand{text-align:center;color:var(--muted);margin:6px 0 2px;font-size:15px}
 

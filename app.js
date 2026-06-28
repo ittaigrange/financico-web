@@ -22,6 +22,7 @@
     '      <div class="brand">מה לרשום?</div>',
     '      <a class="c-income"  href="./income/">＋ הכנסה</a>',
     '      <a class="c-expense" href="./expense/">－ הוצאה</a>',
+    '      <button class="c-data" id="c-data" type="button">📊 נתונים</button>',
     '    </section>',
     '    <form id="form-expense" class="form hidden" autocomplete="off">',
     '      <label for="e-amount">סכום (₪)</label>',
@@ -322,6 +323,22 @@
   refreshDatalists();
   show(type === 'expense' ? 'expense' : type === 'income' ? 'income' : 'chooser');
   if (!hasSettings()) openSettings();
+
+  // ---- database section (lazy: only fetch db.js when first entered) ----
+  // Keeps the main logging screen lean — the list/render code never loads
+  // until the user taps "נתונים". db.js lives at the root next to app.js.
+  var dataBtn = document.getElementById('c-data');
+  if (dataBtn){
+    dataBtn.addEventListener('click', function(){
+      if (window.FinDB){ window.FinDB.open(); return; }
+      var base = window.FIN_TYPE ? '../' : './';
+      var s = document.createElement('script');
+      s.src = base + 'db.js';
+      s.onload  = function(){ if (window.FinDB) window.FinDB.open(); };
+      s.onerror = function(){ alert('טעינת מסד הנתונים נכשלה — בדוק חיבור'); };
+      document.head.appendChild(s);
+    });
+  }
 
   // ---- service worker (root sw.js, root scope, covers the subfolders) ----
   if ('serviceWorker' in navigator){
