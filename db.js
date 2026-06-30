@@ -23,9 +23,10 @@
     '.db-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px;overscroll-behavior:contain}',
     '.db-home{display:flex;flex-direction:column;gap:14px}',
     '.db-tile{display:flex;align-items:center;justify-content:center;gap:10px;height:96px;border:0;border-radius:16px;font-size:22px;font-weight:800;color:#fff;cursor:pointer;font-family:inherit}',
-    '.db-tile.inc{background:var(--green)}.db-tile.exp{background:var(--blue)}.db-tile.ana{background:#94a3b8}',
+    '.db-tile.inc{background:var(--green)}.db-tile.exp{background:var(--blue)}.db-tile.ana{background:#7c3aed}',
     '.db-tile[disabled]{opacity:.6;cursor:default}',
     '.db-tile .soon{font-size:13px;font-weight:700;background:rgba(255,255,255,.25);padding:3px 9px;border-radius:999px}',
+    '.db-tile .ext{font-size:18px;opacity:.85}',
     '.db-state{text-align:center;color:var(--muted);padding:30px 12px;font-size:16px;line-height:1.5}',
     '.db-state .retry{margin-top:14px;background:#475569;color:#fff;border:0;border-radius:10px;padding:10px 18px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit}',
     '.db-count{color:var(--muted);font-size:13px;margin:0 2px 10px}',
@@ -69,7 +70,7 @@
     '  <section class="db-home" id="db-home">',
     '    <button class="db-tile inc" data-kind="income">נתוני הכנסות</button>',
     '    <button class="db-tile exp" data-kind="expense">נתוני הוצאות</button>',
-    '    <button class="db-tile ana" id="db-analysis" disabled>ניתוח <span class="soon">בקרוב</span></button>',
+    '    <button class="db-tile ana" id="db-analysis">ניתוח <span class="ext">↗</span></button>',
     '  </section>',
     '  <section class="db-list hidden" id="db-list">',
     '    <div class="db-state hidden" id="db-state"></div>',
@@ -215,6 +216,7 @@
   // ---- wiring ----
   homeEl.querySelector('[data-kind="income"]').addEventListener('click', function () { openList('income'); });
   homeEl.querySelector('[data-kind="expense"]').addEventListener('click', function () { openList('expense'); });
+  homeEl.querySelector('#db-analysis').addEventListener('click', openAnalysis);
 
   backEl.addEventListener('click', function () {
     if (view === 'detail') closeDetail();
@@ -237,6 +239,22 @@
     screen.classList.add('hidden');
     var wrap = document.querySelector('.wrap');
     if (wrap) wrap.classList.remove('hidden');
+  }
+
+  // ---- analysis tile: open the Google Sheets "סיכום" dashboard externally ----
+  // The dashboard URL is stored per-device in settings (fin_dashboard_url) so the
+  // private sheet's address never lives in the public repo. The sheet has its own
+  // month/year selector + month/YTD columns, so there's no in-app period control.
+  function openAnalysis() {
+    var url = (LS.getItem('fin_dashboard_url') || '').trim();
+    if (url) {
+      window.open(url, '_blank', 'noopener');   // external -> browser / Custom Tab in the TWA
+      return;
+    }
+    alert('כדי לראות את הניתוח, הדבק תחילה את כתובת לשונית "סיכום" בהגדרות (גלגל השיניים במסך הראשי).');
+    exitToMain();
+    var gear = document.getElementById('gear');
+    if (gear) gear.click();
   }
 
   // ---- detail / edit view -------------------------------------------------

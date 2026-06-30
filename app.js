@@ -68,6 +68,8 @@
     '    <input id="s-endpoint" type="url" placeholder="https://script.google.com/.../exec">',
     '    <label for="s-token">טוקן</label>',
     '    <input id="s-token" type="text" placeholder="הטוקן הסודי">',
+    '    <label for="s-dashboard">כתובת דשבורד "סיכום" (אופציונלי)</label>',
+    '    <input id="s-dashboard" type="url" placeholder="https://docs.google.com/spreadsheets/.../#gid=...">',
     '    <div class="row">',
     '      <button class="cancel" id="s-cancel">ביטול</button>',
     '      <button class="save-set" id="s-save">שמירה</button>',
@@ -129,6 +131,7 @@
   function openSettings(){
     document.getElementById('s-endpoint').value = endpoint();
     document.getElementById('s-token').value = token();
+    document.getElementById('s-dashboard').value = LS.getItem('fin_dashboard_url') || '';
     panel.classList.remove('hidden');
   }
   function closeSettings(){ panel.classList.add('hidden'); }
@@ -143,6 +146,7 @@
     if (!ep || !tk){ alert('צריך גם כתובת וגם טוקן'); return; }
     LS.setItem('fin_endpoint', ep);
     LS.setItem('fin_token', tk);
+    LS.setItem('fin_dashboard_url', document.getElementById('s-dashboard').value.trim()); // optional
     closeSettings();
   });
 
