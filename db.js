@@ -40,7 +40,18 @@
     '.r-via,.r-cat{background:#eef2f5;padding:2px 8px;border-radius:999px}',
     '.badge{padding:2px 9px;border-radius:999px;font-weight:700;font-size:12px;margin-inline-start:auto}',
     '.badge.ok{background:#dcfce7;color:#166534}',
-    '.badge.no{background:#f1f5f9;color:#64748b}'
+    '.badge.no{background:#f1f5f9;color:#64748b}',
+    '.db-detail{position:absolute;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column}',
+    '.dd-readnote{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:8px}',
+    '.dd-ro-label{font-size:13px;color:var(--muted);margin:12px 2px 2px}',
+    '.dd-ro-val{font-size:17px;font-weight:600;color:var(--ink);padding:8px 0;border-bottom:1px solid var(--line);min-height:20px}',
+    '.dd-toggle{display:flex;gap:8px;margin-top:6px}',
+    '.dd-toggle button{flex:1;padding:12px;font-size:16px;border:1.5px solid var(--line);background:var(--card);border-radius:12px;cursor:pointer;color:var(--ink);font-family:inherit}',
+    '.dd-toggle button.on{border-color:var(--ink);font-weight:700;background:#eef2f5}',
+    '.dd-save{width:100%;margin-top:22px;padding:16px;font-size:18px;font-weight:700;color:#fff;border:0;border-radius:14px;cursor:pointer;background:#475569;font-family:inherit}',
+    '.dd-save:disabled{opacity:.45}',
+    '.dd-status{min-height:22px;margin-top:12px;text-align:center;font-size:15px;font-weight:600}',
+    '.dd-status.err{color:var(--err)}.dd-status.ok{color:var(--green)}'
   ].join('');
   var styleEl = document.createElement('style');
   styleEl.textContent = css;
@@ -65,6 +76,13 @@
     '    <div class="db-count hidden" id="db-count"></div>',
     '    <div class="db-rows" id="db-rows"></div>',
     '  </section>',
+    '</div>',
+    '<div class="db-detail hidden" id="db-detail">',
+    '  <div class="db-head">',
+    '    <button class="db-back" id="dd-back">חזרה</button>',
+    '    <h2 id="dd-title">עריכה</h2>',
+    '  </div>',
+    '  <div class="db-body"><div id="dd-form"></div></div>',
     '</div>'
   ].join('\n');
   document.body.appendChild(screen);
@@ -76,9 +94,15 @@
   var stateEl = screen.querySelector('#db-state');
   var countEl = screen.querySelector('#db-count');
   var rowsEl  = screen.querySelector('#db-rows');
+  var detailEl = screen.querySelector('#db-detail');
+  var ddBack   = screen.querySelector('#dd-back');
+  var ddTitle  = screen.querySelector('#dd-title');
+  var ddForm   = screen.querySelector('#dd-form');
 
-  var view = 'home';          // 'home' | 'list'
+  var view = 'home';          // 'home' | 'list' | 'detail'
   var currentKind = null;     // 'income' | 'expense'
+  var currentRows = [];       // the rows backing the current list (full objects)
+  var detailState = { kind: null, idx: -1, row: null, editable: false };
 
   // ---- helpers ----
   function esc(s) {
@@ -107,25 +131,25 @@
     }).then(function (res) { return res.json(); });
   }
 
-  // ---- row renderers ----
-  function incRow(r) {
-    return '<div class="db-row" data-kind="income" data-id="' + esc(r.id) + '">'
-      + '<div class="r-main"><span class="r-name">' + esc(r.name) + '</span>'
-      + '<span class="r-amt">' + money(r.amount) + '</span></div>'
-      + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
-      + (r.via ? '<span class="r-via">' + esc(r.via) + '</span>' : '')
-      + '</div></div>';
-  }
-  function expRow(r) {
+  // ---- row renderers (inner = the row's content; html = inner wrapped in the
+  // tappable card carrying data-idx so a saved edit can refresh it in place) ----
+  function rowInner(kind, r) {
+    var head = '<div class="r-main"><span class="r-name">' + esc(r.name) + '</span>'
+      + '<span class="r-amt">' + money(r.amount) + '</span></div>';
+    if (kind === 'income') {
+      return head + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
+        + (r.via ? '<span class="r-via">' + esc(r.via) + '</span>' : '') + '</div>';
+    }
     var badge = r.recognized
       ? '<span class="badge ok">עסקי מוכר</span>'
       : '<span class="badge no">לא</span>';
-    return '<div class="db-row" data-kind="expense" data-id="' + esc(r.id) + '">'
-      + '<div class="r-main"><span class="r-name">' + esc(r.name) + '</span>'
-      + '<span class="r-amt">' + money(r.amount) + '</span></div>'
-      + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
+    return head + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
       + (r.category ? '<span class="r-cat">' + esc(r.category) + '</span>' : '')
-      + badge + '</div></div>';
+      + badge + '</div>';
+  }
+  function rowHtml(kind, r, idx) {
+    return '<div class="db-row" data-kind="' + kind + '" data-id="' + esc(r.id)
+      + '" data-idx="' + idx + '">' + rowInner(kind, r) + '</div>';
   }
 
   // ---- state line (loading / empty / error / missing settings) ----
@@ -152,6 +176,7 @@
   function showHome() {
     view = 'home'; currentKind = null;
     titleEl.textContent = 'מסד נתונים';
+    detailEl.classList.add('hidden');
     listEl.classList.add('hidden');
     homeEl.classList.remove('hidden');
     setState(null);
@@ -177,7 +202,8 @@
       }
       if (data.length === 0) { setState('empty'); return; }
       data.sort(function (a, b) { return dateKey(b.date) - dateKey(a.date); });
-      rowsEl.innerHTML = data.map(kind === 'income' ? incRow : expRow).join('');
+      currentRows = data;
+      rowsEl.innerHTML = data.map(function (r, i) { return rowHtml(kind, r, i); }).join('');
       setState(null);
       countEl.className = 'db-count';
       countEl.textContent = data.length + ' רשומות';
@@ -191,21 +217,166 @@
   homeEl.querySelector('[data-kind="expense"]').addEventListener('click', function () { openList('expense'); });
 
   backEl.addEventListener('click', function () {
-    if (view === 'list') showHome();
+    if (view === 'detail') closeDetail();
+    else if (view === 'list') showHome();
     else exitToMain();
   });
+  ddBack.addEventListener('click', closeDetail);
 
-  // Stage 3 will open the row editor here; for now a tap just logs.
+  // Row tap -> open the detail/edit view for THAT row (no re-fetch; we pass the
+  // full row object we already have, looked up by its list index).
   rowsEl.addEventListener('click', function (ev) {
-    var row = ev.target.closest('.db-row');
-    if (!row) return;
-    console.log('row tap', row.getAttribute('data-kind'), row.getAttribute('data-id'));
+    var el = ev.target.closest('.db-row');
+    if (!el) return;
+    var idx = parseInt(el.getAttribute('data-idx'), 10);
+    if (isNaN(idx) || !currentRows[idx]) return;
+    openDetail(currentKind, currentRows[idx], idx);
   });
 
   function exitToMain() {
     screen.classList.add('hidden');
     var wrap = document.querySelector('.wrap');
     if (wrap) wrap.classList.remove('hidden');
+  }
+
+  // ---- detail / edit view -------------------------------------------------
+  // dd/mm/yyyy <-> yyyy-mm-dd (the value format an <input type="date"> uses).
+  function toInputDate(d) {
+    var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(d || '');
+    return m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : '';
+  }
+  function fromInputDate(v) {
+    var m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v || '');
+    return m ? ('0' + m[3]).slice(-2) + '/' + ('0' + m[2]).slice(-2) + '/' + m[1] : '';
+  }
+
+  function roField(label, val) {
+    var shown = (val === '' || val == null) ? '—' : esc(val);
+    return '<div class="dd-ro-label">' + esc(label) + '</div><div class="dd-ro-val">' + shown + '</div>';
+  }
+  // Imported rows (empty id) -> read-only; updateRow is never called for these.
+  function readForm(kind, row) {
+    var h = '<div class="dd-readnote">רשומה מיובאת — לא ניתנת לעריכה כאן</div>';
+    h += roField('תאריך', row.date) + roField('סכום', money(row.amount));
+    if (kind === 'income') {
+      h += roField('שם הכנסה', row.name) + roField('דרך', row.via);
+    } else {
+      h += roField('שם', row.name) + roField('סוג', row.category)
+        + roField('מוכרת?', row.recognized ? 'עסקי מוכר' : 'לא');
+    }
+    return h + roField('הערה', row.note);
+  }
+
+  function editForm(kind, row) {
+    var h = '';
+    h += '<label for="dd-date">תאריך</label>'
+       + '<input id="dd-date" type="date" value="' + esc(toInputDate(row.date)) + '">';
+    h += '<label for="dd-amount">סכום (₪)</label>'
+       + '<input id="dd-amount" class="amount" type="number" inputmode="decimal" min="0" step="any" value="' + esc(row.amount) + '">';
+    if (kind === 'income') {
+      h += '<label for="dd-name">שם הכנסה</label><input id="dd-name" type="text" value="' + esc(row.name) + '">';
+      h += '<label for="dd-via">דרך</label><input id="dd-via" type="text" list="dl-payers" value="' + esc(row.via) + '">';
+    } else {
+      h += '<label for="dd-name">שם</label><input id="dd-name" type="text" value="' + esc(row.name) + '">';
+      h += '<label for="dd-cat">סוג</label><input id="dd-cat" type="text" list="dl-categories" value="' + esc(row.category) + '">';
+      h += '<label>מוכרת?</label><div class="dd-toggle" id="dd-rec">'
+         + '<button type="button" data-v="1"' + (row.recognized ? ' class="on"' : '') + '>עסקי מוכר</button>'
+         + '<button type="button" data-v="0"' + (row.recognized ? '' : ' class="on"') + '>לא</button></div>';
+    }
+    h += '<label for="dd-note">הערה</label><input id="dd-note" type="text" value="' + esc(row.note) + '">';
+    h += '<button type="button" class="dd-save" id="dd-save">שמירה</button>';
+    h += '<div class="dd-status" id="dd-status"></div>';
+    return h;
+  }
+
+  function openDetail(kind, row, idx) {
+    var editable = !!(row.id && String(row.id).trim() !== '');
+    detailState = { kind: kind, idx: idx, row: row, editable: editable };
+    view = 'detail';
+    ddTitle.textContent = editable
+      ? (kind === 'income' ? 'עריכת הכנסה' : 'עריכת הוצאה')
+      : (kind === 'income' ? 'פרטי הכנסה' : 'פרטי הוצאה');
+    ddForm.innerHTML = editable ? editForm(kind, row) : readForm(kind, row);
+    if (editable) {
+      var rec = ddForm.querySelector('#dd-rec');
+      if (rec) rec.addEventListener('click', function (ev) {
+        var b = ev.target.closest('button'); if (!b) return;
+        Array.prototype.forEach.call(rec.querySelectorAll('button'), function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+      });
+      ddForm.querySelector('#dd-save').addEventListener('click', function () { saveDetail(kind, row, idx); });
+    }
+    detailEl.classList.remove('hidden');
+  }
+
+  function closeDetail() {
+    detailEl.classList.add('hidden');
+    view = 'list';
+  }
+
+  function ddStatus(msg, cls) {
+    var s = ddForm.querySelector('#dd-status');
+    if (s) { s.className = 'dd-status' + (cls ? ' ' + cls : ''); s.textContent = msg || ''; }
+  }
+
+  function saveDetail(kind, row, idx) {
+    var dateV   = fromInputDate((ddForm.querySelector('#dd-date').value || '').trim());
+    var amountV = parseFloat((ddForm.querySelector('#dd-amount').value || '').trim());
+    var nameV   = (ddForm.querySelector('#dd-name').value || '').trim();
+    var noteV   = (ddForm.querySelector('#dd-note').value || '').trim();
+
+    // validation (block save, keep edits, show inline message)
+    if (!(amountV > 0)) { ddStatus('סכום חייב להיות מספר גדול מאפס', 'err'); return; }
+    if (!dateV)         { ddStatus('תאריך לא תקין', 'err'); return; }
+    if (!nameV)         { ddStatus('שם חובה', 'err'); return; }
+
+    // build a payload of ONLY the changed fields
+    var changed = {};
+    if (dateV !== (row.date || ''))          changed.date = dateV;
+    if (amountV !== Number(row.amount))      changed.amount = amountV;
+    if (nameV !== (row.name || ''))          changed.name = nameV;
+    if (kind === 'income') {
+      var viaV = (ddForm.querySelector('#dd-via').value || '').trim();
+      if (viaV !== (row.via || ''))          changed.via = viaV;
+    } else {
+      var catV = (ddForm.querySelector('#dd-cat').value || '').trim();
+      if (catV !== (row.category || ''))     changed.category = catV;
+      var onBtn = ddForm.querySelector('#dd-rec button.on');
+      var recV = onBtn ? onBtn.getAttribute('data-v') === '1' : !!row.recognized;
+      if (recV !== !!row.recognized)         changed.recognized = recV;
+    }
+    if (noteV !== (row.note || ''))          changed.note = noteV;
+
+    var keys = Object.keys(changed);
+    if (keys.length === 0) { closeDetail(); return; }   // nothing changed -> no-op
+
+    ddStatus('שומר…', '');
+    var saveBtn = ddForm.querySelector('#dd-save');
+    if (saveBtn) saveBtn.disabled = true;
+
+    var payload = { token: token(), action: 'updateRow', sheet: kind, id: row.id };
+    keys.forEach(function (k) { payload[k] = changed[k]; });
+
+    fetch(endpoint(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+      redirect: 'follow'
+    }).then(function (res) { return res.json(); }).then(function (r) {
+      if (r && r.ok) {
+        keys.forEach(function (k) { row[k] = changed[k]; });   // reflect in the list model
+        var rowEl = rowsEl.querySelector('.db-row[data-idx="' + idx + '"]');
+        if (rowEl) rowEl.innerHTML = rowInner(kind, row);      // refresh the card in place
+        closeDetail();
+      } else {
+        var why = r && (r.reason || r.error);
+        ddStatus('השמירה נכשלה — נסה שוב' + (why ? ' (' + esc(why) + ')' : ''), 'err');
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    }).catch(function () {
+      ddStatus('השמירה נכשלה — נסה שוב', 'err');
+      if (saveBtn) saveBtn.disabled = false;
+    });
   }
 
   // ---- public entry (called by app.js) ----
