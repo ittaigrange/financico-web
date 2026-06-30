@@ -23,6 +23,7 @@
     '      <a class="c-income"  href="./income/">＋ הכנסה</a>',
     '      <a class="c-expense" href="./expense/">－ הוצאה</a>',
     '      <button class="c-data" id="c-data" type="button">📊 נתונים</button>',
+    '      <button class="c-pay" id="c-pay" type="button">🧾 דרישת תשלום</button>',
     '    </section>',
     '    <form id="form-expense" class="form hidden" autocomplete="off">',
     '      <label for="e-amount">סכום (₪)</label>',
@@ -340,6 +341,21 @@
       s.src = base + 'db.js';
       s.onload  = function(){ if (window.FinDB) window.FinDB.open(); };
       s.onerror = function(){ alert('טעינת מסד הנתונים נכשלה — בדוק חיבור'); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // ---- payment-request section (lazy: only fetch payment.js when first tapped) ----
+  // Same pattern as the database section above — keeps the main screen lean.
+  var payBtn = document.getElementById('c-pay');
+  if (payBtn){
+    payBtn.addEventListener('click', function(){
+      if (window.FinPay){ window.FinPay.open(); return; }
+      var base = window.FIN_TYPE ? '../' : './';
+      var s = document.createElement('script');
+      s.src = base + 'payment.js';
+      s.onload  = function(){ if (window.FinPay) window.FinPay.open(); };
+      s.onerror = function(){ alert('טעינת דרישת התשלום נכשלה — בדוק חיבור'); };
       document.head.appendChild(s);
     });
   }
