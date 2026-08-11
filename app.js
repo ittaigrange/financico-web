@@ -83,14 +83,17 @@
   var SEED = {
     fin_categories: ['דלק','ציוד משרדי','ביטוח','הוצאות הדרכה','ציוד הדרכה','ביגוד','שכירות סטודיו'],
     fin_payers:     ['קק"ל','הילה','לירן','רוקט'],
-    fin_methods:    ['פייבוקס','מזומן','העברה בנקאית','אשראי','ביט']
+    fin_methods:    ['פייבוקס','מזומן','העברה בנקאית','אשראי','ביט','+30']
   };
 
   // payer -> default payment method (Tweak A). Only used to fill an EMPTY method.
+  // '+30' marks a job paid by monthly bank transfer: excluded from the הכנסות sum,
+  // counted instead from the העברות 30 + שהתקבלו tab on its received date.
+  // Hand-selectable for any other job via the אופן תשלום datalist.
   var PAYER_METHOD = {
-    'קק"ל': 'העברה בנקאית',
-    'הילה': 'העברה בנקאית',
-    'לירן': 'העברה בנקאית'
+    'קק"ל': '+30',
+    'הילה': '+30',
+    'לירן': '+30'
   };
 
   function getList(key){
