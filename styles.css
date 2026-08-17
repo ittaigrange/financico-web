@@ -50,6 +50,15 @@ input.amount{font-size:30px;font-weight:700;text-align:center;letter-spacing:.5p
   border-radius:12px;cursor:pointer;color:var(--ink)
 }
 .toggle button.on{border-color:var(--ink);font-weight:700;background:#eef2f5}
+
+.rcpt{margin-top:14px}
+.rcpt-actions{display:flex;gap:8px}
+.rcpt-btn{flex:1;padding:12px;font-size:15px;border:1.5px solid var(--line);background:var(--card);
+  border-radius:12px;cursor:pointer;color:var(--ink);font-family:inherit}
+.rcpt-preview{position:relative;margin-top:10px}
+.rcpt-preview img{width:100%;border-radius:12px;display:block;border:1px solid var(--line)}
+.rcpt-remove{position:absolute;top:8px;inset-inline-end:8px;background:rgba(15,22,30,.65);color:#fff;
+  border:0;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
 .status{min-height:24px;margin-top:14px;text-align:center;font-size:15px;font-weight:600}
 .status.ok{color:var(--green)} .status.err{color:var(--err)}
 .hidden{display:none!important}

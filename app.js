@@ -37,6 +37,19 @@
     '        <button type="button" data-v="עסקי" class="on">עסקי</button>',
     '        <button type="button" data-v="אישי">אישי</button>',
     '      </div>',
+    '      <div class="rcpt" id="e-rcpt">',
+    '        <label>קבלה (רשות)</label>',
+    '        <div class="rcpt-actions">',
+    '          <button type="button" class="rcpt-btn" id="e-rcpt-cam">📷 צלם</button>',
+    '          <button type="button" class="rcpt-btn" id="e-rcpt-gal">🖼 גלריה</button>',
+    '        </div>',
+    '        <div class="rcpt-preview hidden" id="e-rcpt-preview">',
+    '          <img id="e-rcpt-img" alt="קבלה">',
+    '          <button type="button" class="rcpt-remove" id="e-rcpt-remove">✕ הסר</button>',
+    '        </div>',
+    '        <input type="file" accept="image/*" capture="environment" id="e-rcpt-cam-input" class="hidden">',
+    '        <input type="file" accept="image/*" id="e-rcpt-gal-input" class="hidden">',
+    '      </div>',
     '      <label for="e-note">הערה</label>',
     '      <input id="e-note" type="text">',
     '      <button type="submit" class="save" disabled>שמירה</button>',
@@ -165,6 +178,65 @@
     return await res.json(); // { ok:true, id, tab, row }
   }
 
+  // ---- receipt-photo compression (canvas downscale, client-side) ----
+  // Resolves a "data:image/jpeg;base64,..." data URI, downscaled to maxDim on
+  // its longest side and re-encoded as JPEG at the given quality. Keeps the
+  // upload payload small; runs before the file ever leaves the device.
+  function compressImage(file, maxDim, quality){
+    return new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onerror = function(){ reject(new Error('read failed')); };
+      reader.onload = function(){
+        var img = new Image();
+        img.onerror = function(){ reject(new Error('decode failed')); };
+        img.onload = function(){
+          var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          var w = Math.max(1, Math.round(img.width * scale));
+          var h = Math.max(1, Math.round(img.height * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ---- receipt-photo capture (expense form only, gated to business scope) ----
+  var rcptSection  = document.getElementById('e-rcpt');
+  var rcptPreview  = document.getElementById('e-rcpt-preview');
+  var rcptImg      = document.getElementById('e-rcpt-img');
+  var rcptCamInput = document.getElementById('e-rcpt-cam-input');
+  var rcptGalInput = document.getElementById('e-rcpt-gal-input');
+  var pendingReceipt = null; // compressed data URI, or null when no photo staged
+
+  function clearPendingReceipt(){
+    pendingReceipt = null;
+    rcptPreview.classList.add('hidden');
+    rcptImg.src = '';
+    rcptCamInput.value = '';
+    rcptGalInput.value = '';
+  }
+  function showRcptSection(show){
+    rcptSection.classList.toggle('hidden', !show);
+    if (!show) clearPendingReceipt();
+  }
+  function handleReceiptFile(file){
+    if (!file) return;
+    compressImage(file, 1400, 0.7).then(function(dataUrl){
+      pendingReceipt = dataUrl;
+      rcptImg.src = dataUrl;
+      rcptPreview.classList.remove('hidden');
+    }).catch(function(){ alert('קריאת התמונה נכשלה, נסה שוב'); });
+  }
+  document.getElementById('e-rcpt-cam').addEventListener('click', function(){ rcptCamInput.click(); });
+  document.getElementById('e-rcpt-gal').addEventListener('click', function(){ rcptGalInput.click(); });
+  rcptCamInput.addEventListener('change', function(){ handleReceiptFile(this.files[0]); });
+  rcptGalInput.addEventListener('change', function(){ handleReceiptFile(this.files[0]); });
+  document.getElementById('e-rcpt-remove').addEventListener('click', clearPendingReceipt);
+
   // ---- form wiring ----
   function setupForm(opts){
     var form   = document.getElementById(opts.formId);
@@ -222,6 +294,7 @@
       scopeVal = b.getAttribute('data-v');
       document.querySelectorAll('#e-scope button').forEach(function(x){ x.classList.remove('on'); });
       b.classList.add('on');
+      showRcptSection(scopeVal === 'עסקי'); // receipt affordance: business-recognized rows only
     });
   });
 
@@ -241,13 +314,16 @@
     build: function(){
       var amount = parseFloat(document.getElementById('e-amount').value);
       var name = document.getElementById('e-name').value.trim();
-      return {
+      var payload = {
         token: token(), stream:'expense', amount: amount, name: name,
         category: document.getElementById('e-category').value.trim(),
         scope: scopeVal,
         note: document.getElementById('e-note').value.trim(),
         raw: name + ' ' + amount
       };
+      // Photo optional at save; only meaningful for business rows (מוכרת? = TRUE).
+      if (scopeVal === 'עסקי' && pendingReceipt) payload.receiptImage = pendingReceipt;
+      return payload;
     },
     remember: function(p){ addToList('fin_categories', p.category); },
     afterReset: function(){
@@ -255,6 +331,8 @@
       document.querySelectorAll('#e-scope button').forEach(function(x){
         x.classList.toggle('on', x.getAttribute('data-v') === 'עסקי');
       });
+      clearPendingReceipt();
+      showRcptSection(true);
     }
   });
 

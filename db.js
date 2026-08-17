@@ -52,7 +52,19 @@
     '.dd-save{width:100%;margin-top:22px;padding:16px;font-size:18px;font-weight:700;color:#fff;border:0;border-radius:14px;cursor:pointer;background:#475569;font-family:inherit}',
     '.dd-save:disabled{opacity:.45}',
     '.dd-status{min-height:22px;margin-top:12px;text-align:center;font-size:15px;font-weight:600}',
-    '.dd-status.err{color:var(--err)}.dd-status.ok{color:var(--green)}'
+    '.dd-status.err{color:var(--err)}.dd-status.ok{color:var(--green)}',
+    '.badge.miss{background:#fff7ed;color:#9a3412}',
+    '.db-filter{display:flex;align-items:center;gap:8px;margin:0 2px 12px;font-size:14px;color:var(--muted)}',
+    '.dd-rcpt{margin-top:10px}',
+    '.rcpt-actions{display:flex;gap:8px}',
+    '.rcpt-btn{flex:1;padding:11px;font-size:14px;border:1.5px solid var(--line);background:var(--card);border-radius:10px;cursor:pointer;color:var(--ink);font-family:inherit}',
+    '.rcpt-view-row{display:flex;gap:14px;margin-top:8px}',
+    '.rcpt-link{background:none;border:0;padding:0;font-size:13px;font-weight:700;color:#475569;cursor:pointer;text-decoration:underline;font-family:inherit}',
+    '.rcpt-link.rcpt-danger{color:var(--err)}',
+    '.rcpt-preview{margin-top:10px}',
+    '.rcpt-preview img{width:100%;border-radius:10px;display:block;border:1px solid var(--line)}',
+    '.dd-rcpt-status{min-height:18px;margin-top:6px;font-size:13px;font-weight:600}',
+    '.dd-rcpt-status.err{color:var(--err)}.dd-rcpt-status.ok{color:var(--green)}'
   ].join('');
   var styleEl = document.createElement('style');
   styleEl.textContent = css;
@@ -73,6 +85,7 @@
     '    <button class="db-tile ana" id="db-analysis">ניתוח <span class="ext">↗</span></button>',
     '  </section>',
     '  <section class="db-list hidden" id="db-list">',
+    '    <div class="db-filter hidden" id="db-filter"><label><input type="checkbox" id="db-filter-missing"> הצג רק חסרות קבלה</label></div>',
     '    <div class="db-state hidden" id="db-state"></div>',
     '    <div class="db-count hidden" id="db-count"></div>',
     '    <div class="db-rows" id="db-rows"></div>',
@@ -95,6 +108,8 @@
   var stateEl = screen.querySelector('#db-state');
   var countEl = screen.querySelector('#db-count');
   var rowsEl  = screen.querySelector('#db-rows');
+  var filterEl = screen.querySelector('#db-filter');
+  var filterMissingEl = screen.querySelector('#db-filter-missing');
   var detailEl = screen.querySelector('#db-detail');
   var ddBack   = screen.querySelector('#dd-back');
   var ddTitle  = screen.querySelector('#dd-title');
@@ -123,13 +138,51 @@
   }
 
   // ---- network (text/plain to dodge CORS preflight, same as app.js) ----
-  function listRows(sheet) {
+  function postAction(payload) {
     return fetch(endpoint(), {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ token: token(), action: 'listRows', sheet: sheet }),
+      body: JSON.stringify(payload),
       redirect: 'follow'
     }).then(function (res) { return res.json(); });
+  }
+  function listRows(sheet) {
+    return postAction({ token: token(), action: 'listRows', sheet: sheet });
+  }
+  function uploadReceipt(dataUrl) {
+    return postAction({ token: token(), action: 'uploadReceipt', image: dataUrl });
+  }
+  function getReceipt(ref) {
+    return postAction({ token: token(), action: 'getReceipt', ref: ref });
+  }
+  function deleteReceipt(ref) {
+    return postAction({ token: token(), action: 'deleteReceipt', ref: ref });
+  }
+  function updateReceiptField(id, ref) {
+    return postAction({ token: token(), action: 'updateRow', sheet: 'expense', id: id, receipt: ref });
+  }
+
+  // ---- receipt-photo compression (canvas downscale, client-side, same recipe as app.js) ----
+  function compressImage(file, maxDim, quality) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('read failed')); };
+      reader.onload = function () {
+        var img = new Image();
+        img.onerror = function () { reject(new Error('decode failed')); };
+        img.onload = function () {
+          var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          var w = Math.max(1, Math.round(img.width * scale));
+          var h = Math.max(1, Math.round(img.height * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
   }
 
   // ---- row renderers (inner = the row's content; html = inner wrapped in the
@@ -144,9 +197,10 @@
     var badge = r.recognized
       ? '<span class="badge ok">עסקי מוכר</span>'
       : '<span class="badge no">לא</span>';
+    var missing = (r.recognized && !r.receipt) ? '<span class="badge miss">📷 חסרה קבלה</span>' : '';
     return head + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
       + (r.category ? '<span class="r-cat">' + esc(r.category) + '</span>' : '')
-      + badge + '</div>';
+      + badge + missing + '</div>';
   }
   function rowHtml(kind, r, idx) {
     return '<div class="db-row" data-kind="' + kind + '" data-id="' + esc(r.id)
@@ -190,6 +244,8 @@
     homeEl.classList.add('hidden');
     listEl.classList.remove('hidden');
     rowsEl.innerHTML = '';
+    filterMissingEl.checked = false;
+    filterEl.classList.toggle('hidden', kind !== 'expense'); // missing-photo filter: expense only
     setState('loading');
 
     if (!endpoint() || !token()) { setState('nosettings'); return; }
@@ -204,14 +260,33 @@
       if (data.length === 0) { setState('empty'); return; }
       data.sort(function (a, b) { return dateKey(b.date) - dateKey(a.date); });
       currentRows = data;
-      rowsEl.innerHTML = data.map(function (r, i) { return rowHtml(kind, r, i); }).join('');
       setState(null);
-      countEl.className = 'db-count';
-      countEl.textContent = data.length + ' רשומות';
+      renderRows();
     }).catch(function () {
       if (currentKind === kind) setState('error');
     });
   }
+
+  // Re-draws #db-rows from currentRows, applying the missing-photo filter when
+  // active on the expense list. data-idx always refers to the row's index in
+  // currentRows (not its filtered position), so tap-to-open keeps working.
+  function renderRows() {
+    var missingOnly = currentKind === 'expense' && filterMissingEl.checked;
+    var visible = [];
+    currentRows.forEach(function (r, i) {
+      if (missingOnly && !(r.recognized && !r.receipt)) return;
+      visible.push({ r: r, i: i });
+    });
+    countEl.className = 'db-count';
+    if (visible.length === 0 && missingOnly) {
+      rowsEl.innerHTML = '';
+      countEl.textContent = 'אין רשומות חסרות קבלה';
+      return;
+    }
+    rowsEl.innerHTML = visible.map(function (x) { return rowHtml(currentKind, x.r, x.i); }).join('');
+    countEl.textContent = visible.length + ' רשומות' + (missingOnly ? ' (חסרות קבלה)' : '');
+  }
+  filterMissingEl.addEventListener('change', renderRows);
 
   // ---- wiring ----
   homeEl.querySelector('[data-kind="income"]').addEventListener('click', function () { openList('income'); });
@@ -300,11 +375,122 @@
       h += '<label>מוכרת?</label><div class="dd-toggle" id="dd-rec">'
          + '<button type="button" data-v="1"' + (row.recognized ? ' class="on"' : '') + '>עסקי מוכר</button>'
          + '<button type="button" data-v="0"' + (row.recognized ? '' : ' class="on"') + '>לא</button></div>';
+      // Receipt affordance: future app-created, business-recognized rows only.
+      h += '<div class="dd-rcpt" id="dd-rcpt"' + (row.recognized ? '' : ' style="display:none"') + '>'
+         + receiptContentHtml(row) + '</div>';
     }
     h += '<label for="dd-note">הערה</label><input id="dd-note" type="text" value="' + esc(row.note) + '">';
     h += '<button type="button" class="dd-save" id="dd-save">שמירה</button>';
     h += '<div class="dd-status" id="dd-status"></div>';
     return h;
+  }
+
+  // ---- receipt widget (expense edit view only) ----------------------------
+  function receiptContentHtml(row) {
+    var has = !!row.receipt;
+    var h = '<label>קבלה</label>';
+    h += '<div class="rcpt-actions">';
+    h += '<button type="button" class="rcpt-btn" id="dd-rcpt-cam">📷 ' + (has ? 'צלם מחדש' : 'צלם') + '</button>';
+    h += '<button type="button" class="rcpt-btn" id="dd-rcpt-gal">🖼 גלריה</button>';
+    h += '</div>';
+    h += '<div class="rcpt-view-row" id="dd-rcpt-view-row"' + (has ? '' : ' style="display:none"') + '>';
+    h += '<button type="button" class="rcpt-link" id="dd-rcpt-show">הצג קבלה</button>';
+    h += '<button type="button" class="rcpt-link rcpt-danger" id="dd-rcpt-remove">הסר קבלה</button>';
+    h += '</div>';
+    h += '<div class="rcpt-preview hidden" id="dd-rcpt-preview"><img id="dd-rcpt-img" alt="קבלה"></div>';
+    h += '<input type="file" accept="image/*" capture="environment" id="dd-rcpt-cam-input" class="hidden">';
+    h += '<input type="file" accept="image/*" id="dd-rcpt-gal-input" class="hidden">';
+    h += '<div class="dd-rcpt-status" id="dd-rcpt-status"></div>';
+    return h;
+  }
+
+  // Wires the receipt widget's buttons. Called after every innerHTML swap
+  // (initial render + after each add/replace/remove), since those replace
+  // the buttons' DOM nodes and drop their old listeners.
+  function wireReceiptWidget(row) {
+    var wrap = ddForm.querySelector('#dd-rcpt');
+    if (!wrap) return;
+    var camBtn    = wrap.querySelector('#dd-rcpt-cam');
+    var galBtn    = wrap.querySelector('#dd-rcpt-gal');
+    var camInput  = wrap.querySelector('#dd-rcpt-cam-input');
+    var galInput  = wrap.querySelector('#dd-rcpt-gal-input');
+    var showBtn   = wrap.querySelector('#dd-rcpt-show');
+    var removeBtn = wrap.querySelector('#dd-rcpt-remove');
+    var preview   = wrap.querySelector('#dd-rcpt-preview');
+    var img       = wrap.querySelector('#dd-rcpt-img');
+    var statusEl  = wrap.querySelector('#dd-rcpt-status');
+
+    function setStatus(msg, cls) {
+      statusEl.className = 'dd-rcpt-status' + (cls ? ' ' + cls : '');
+      statusEl.textContent = msg || '';
+    }
+    function redraw() {
+      wrap.innerHTML = receiptContentHtml(row);
+      wireReceiptWidget(row);
+    }
+    function handleFile(file) {
+      if (!file) return;
+      setStatus('מעלה…', '');
+      compressImage(file, 1400, 0.7).then(function (dataUrl) {
+        return uploadReceipt(dataUrl);
+      }).then(function (up) {
+        if (!up || !up.ok) {
+          setStatus('העלאה נכשלה' + (up && up.reason ? ' (' + esc(up.reason) + ')' : ''), 'err');
+          return;
+        }
+        var oldRef = row.receipt;
+        return updateReceiptField(row.id, up.ref).then(function (r) {
+          if (r && r.ok) {
+            row.receipt = up.ref;
+            if (oldRef) deleteReceipt(oldRef); // best-effort cleanup of the replaced file
+            renderRows();
+            redraw();
+          } else {
+            setStatus('שמירת הקבלה נכשלה', 'err');
+          }
+        });
+      }).catch(function () { setStatus('שגיאה בטיפול בתמונה', 'err'); });
+    }
+
+    camBtn.addEventListener('click', function () { camInput.click(); });
+    galBtn.addEventListener('click', function () { galInput.click(); });
+    camInput.addEventListener('change', function () { handleFile(this.files[0]); });
+    galInput.addEventListener('change', function () { handleFile(this.files[0]); });
+
+    showBtn.addEventListener('click', function () {
+      if (!preview.classList.contains('hidden')) {
+        preview.classList.add('hidden');
+        showBtn.textContent = 'הצג קבלה';
+        return;
+      }
+      setStatus('טוען…', '');
+      getReceipt(row.receipt).then(function (r) {
+        if (r && r.ok) {
+          img.src = r.image;
+          preview.classList.remove('hidden');
+          showBtn.textContent = 'הסתר קבלה';
+          setStatus('', '');
+        } else {
+          setStatus('טעינת הקבלה נכשלה', 'err');
+        }
+      });
+    });
+
+    removeBtn.addEventListener('click', function () {
+      if (!confirm('להסיר את הקבלה?')) return;
+      setStatus('מסיר…', '');
+      var ref = row.receipt;
+      updateReceiptField(row.id, '').then(function (r) {
+        if (r && r.ok) {
+          row.receipt = '';
+          deleteReceipt(ref); // best-effort
+          renderRows();
+          redraw();
+        } else {
+          setStatus('ההסרה נכשלה', 'err');
+        }
+      });
+    });
   }
 
   function openDetail(kind, row, idx) {
@@ -321,8 +507,11 @@
         var b = ev.target.closest('button'); if (!b) return;
         Array.prototype.forEach.call(rec.querySelectorAll('button'), function (x) { x.classList.remove('on'); });
         b.classList.add('on');
+        var rcptWrap = ddForm.querySelector('#dd-rcpt');
+        if (rcptWrap) rcptWrap.style.display = (b.getAttribute('data-v') === '1') ? '' : 'none';
       });
       ddForm.querySelector('#dd-save').addEventListener('click', function () { saveDetail(kind, row, idx); });
+      if (kind === 'expense') wireReceiptWidget(row);
     }
     detailEl.classList.remove('hidden');
   }
@@ -383,8 +572,7 @@
     }).then(function (res) { return res.json(); }).then(function (r) {
       if (r && r.ok) {
         keys.forEach(function (k) { row[k] = changed[k]; });   // reflect in the list model
-        var rowEl = rowsEl.querySelector('.db-row[data-idx="' + idx + '"]');
-        if (rowEl) rowEl.innerHTML = rowInner(kind, row);      // refresh the card in place
+        renderRows();                                          // recognized can change filter membership
         closeDetail();
       } else {
         var why = r && (r.reason || r.error);
