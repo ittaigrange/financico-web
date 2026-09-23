@@ -5,7 +5,15 @@
    full-screen view over the main app, and is purely read-only this stage.
 
    Views: home (three tiles) -> list (income | expense). Back from a list
-   returns to home; back from home returns to the main logging app. */
+   returns to home; back from home returns to the main logging app.
+
+   Receipts (door B of issueReceipt): on the income list, rows that carry a מזהה
+   and are not yet on a receipt get a checkbox. Selecting one or more shows an
+   action bar with "הפק קבלה"; the modal pre-fills customer name / email from the
+   rows' לקוח / מייל לקוח columns (missing fields marked for entry), payment date
+   (today) and method, and sends issueReceipt({rowIds, customer, payment}). The
+   server writes the receipt onto the rows and the customer back where empty. A
+   selection mixing +30 rows with direct-paid rows is refused with a message. */
 (function () {
   "use strict";
   if (window.FinDB) return;              // guard: load + init exactly once
@@ -64,8 +72,37 @@
     '.rcpt-preview{margin-top:10px}',
     '.rcpt-preview img{width:100%;border-radius:10px;display:block;border:1px solid var(--line)}',
     '.dd-rcpt-status{min-height:18px;margin-top:6px;font-size:13px;font-weight:600}',
-    '.dd-rcpt-status.err{color:var(--err)}.dd-rcpt-status.ok{color:var(--green)}'
+    '.dd-rcpt-status.err{color:var(--err)}.dd-rcpt-status.ok{color:var(--green)}',
+    // --- receipt selection (income list) ---
+    '.db-row.sel{border-color:#1d4ed8;background:#eff6ff}',
+    '.r-sel{width:22px;height:22px;margin:0 0 0 10px;flex:none;accent-color:#1d4ed8;cursor:pointer}',
+    '.r-main .r-sel{align-self:center}',
+    '.badge.rcpt{background:#dbeafe;color:#1e40af}',
+    '.badge.rcpt a{color:inherit;text-decoration:none}',
+    '.db-selbar{position:sticky;bottom:0;margin:12px -16px -16px;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--line);display:flex;align-items:center;gap:10px}',
+    '.db-selbar .sum{flex:1;font-size:14px;color:var(--muted);line-height:1.4}',
+    '.db-selbar .sum b{color:var(--ink);font-size:16px}',
+    '.db-selbar .sum .err{color:var(--err);font-weight:600}',
+    '.db-selbar button{padding:12px 16px;font-size:16px;font-weight:700;color:#fff;border:0;border-radius:12px;cursor:pointer;background:#1d4ed8;font-family:inherit;white-space:nowrap}',
+    '.db-selbar button:disabled{opacity:.45;cursor:default}',
+    '.db-modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}',
+    '.db-sheet{width:100%;max-width:480px;max-height:92vh;overflow-y:auto;background:var(--bg);border-radius:18px 18px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom))}',
+    '.db-sheet h3{margin:0 0 12px;font-size:19px}',
+    '.db-sheet dl{margin:0 0 14px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:15px}',
+    '.db-sheet dt{color:var(--muted)}.db-sheet dd{margin:0;font-weight:600;overflow-wrap:anywhere}',
+    '.db-sheet label{display:block;font-size:14px;color:var(--muted);margin:10px 2px 6px}',
+    '.db-sheet label .need{color:#dc2626;font-weight:700;margin-inline-start:6px}',
+    '.db-sheet input,.db-sheet select{width:100%}',
+    '.db-sheet input.need{border-color:#dc2626;background:#fef2f2}',
+    '.db-warn{margin:14px 0 0;font-size:14px;line-height:1.5;color:#9a3412}',
+    '.db-acts{display:flex;gap:10px;margin-top:16px}',
+    '.db-acts button{flex:1;padding:14px;font-size:17px;font-weight:700;border-radius:12px;cursor:pointer;font-family:inherit}',
+    '.db-send{background:#1d4ed8;color:#fff;border:0}',
+    '.db-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}',
+    '.db-modal-status{min-height:22px;margin-top:10px;text-align:center;font-size:15px;font-weight:600}',
+    '.db-modal-status.err{color:var(--err)}.db-modal-status.ok{color:var(--green)}'
   ].join('');
+  var PAY_METHODS = ['העברה בנקאית', 'Bit', 'מזומן', 'אשראי'];   // same closed list as backend/Sumit.gs
   var styleEl = document.createElement('style');
   styleEl.textContent = css;
   document.head.appendChild(styleEl);
@@ -89,6 +126,7 @@
     '    <div class="db-state hidden" id="db-state"></div>',
     '    <div class="db-count hidden" id="db-count"></div>',
     '    <div class="db-rows" id="db-rows"></div>',
+    '    <div class="db-selbar hidden" id="db-selbar"><div class="sum" id="db-selsum"></div><button type="button" id="db-selgo">הפק קבלה</button></div>',
     '  </section>',
     '</div>',
     '<div class="db-detail hidden" id="db-detail">',
@@ -110,6 +148,9 @@
   var rowsEl  = screen.querySelector('#db-rows');
   var filterEl = screen.querySelector('#db-filter');
   var filterMissingEl = screen.querySelector('#db-filter-missing');
+  var selBarEl = screen.querySelector('#db-selbar');
+  var selSumEl = screen.querySelector('#db-selsum');
+  var selGoEl  = screen.querySelector('#db-selgo');
   var detailEl = screen.querySelector('#db-detail');
   var ddBack   = screen.querySelector('#dd-back');
   var ddTitle  = screen.querySelector('#dd-title');
@@ -119,6 +160,7 @@
   var currentKind = null;     // 'income' | 'expense'
   var currentRows = [];       // the rows backing the current list (full objects)
   var detailState = { kind: null, idx: -1, row: null, editable: false };
+  var selected = {};          // income rows picked for a receipt: id -> true
 
   // ---- helpers ----
   function esc(s) {
@@ -187,12 +229,27 @@
 
   // ---- row renderers (inner = the row's content; html = inner wrapped in the
   // tappable card carrying data-idx so a saved edit can refresh it in place) ----
+  // An income row can go on a receipt when it has a מזהה and no receipt yet.
+  function selectable(r) {
+    return !!(r.id && String(r.id).trim() !== '' && !r.receiptId && !r.receiptNumber);
+  }
+  function receiptBadge(r) {
+    if (!r.receiptNumber) return '';
+    var label = 'קבלה #' + esc(r.receiptNumber);
+    return '<span class="badge rcpt">' + (r.receiptUrl
+      ? '<a href="' + esc(r.receiptUrl) + '" target="_blank" rel="noopener">' + label + '</a>' : label) + '</span>';
+  }
   function rowInner(kind, r) {
-    var head = '<div class="r-main"><span class="r-name">' + esc(r.name) + '</span>'
+    var check = (kind === 'income' && selectable(r))
+      ? '<input type="checkbox" class="r-sel" aria-label="בחר לקבלה"' + (selected[r.id] ? ' checked' : '') + '>'
+      : '';
+    var head = '<div class="r-main">' + check + '<span class="r-name">' + esc(r.name) + '</span>'
       + '<span class="r-amt">' + money(r.amount) + '</span></div>';
     if (kind === 'income') {
       return head + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
-        + (r.via ? '<span class="r-via">' + esc(r.via) + '</span>' : '') + '</div>';
+        + (r.via ? '<span class="r-via">' + esc(r.via) + '</span>' : '')
+        + (r.method === '+30' ? '<span class="r-via">+30</span>' : '')
+        + receiptBadge(r) + '</div>';
     }
     var badge = r.recognized
       ? '<span class="badge ok">עסקי מוכר</span>'
@@ -203,7 +260,7 @@
       + badge + missing + '</div>';
   }
   function rowHtml(kind, r, idx) {
-    return '<div class="db-row" data-kind="' + kind + '" data-id="' + esc(r.id)
+    return '<div class="db-row' + (selected[r.id] ? ' sel' : '') + '" data-kind="' + kind + '" data-id="' + esc(r.id)
       + '" data-idx="' + idx + '">' + rowInner(kind, r) + '</div>';
   }
 
@@ -246,6 +303,8 @@
     rowsEl.innerHTML = '';
     filterMissingEl.checked = false;
     filterEl.classList.toggle('hidden', kind !== 'expense'); // missing-photo filter: expense only
+    selected = {};
+    renderSelBar();
     setState('loading');
 
     if (!endpoint() || !token()) { setState('nosettings'); return; }
@@ -288,6 +347,38 @@
   }
   filterMissingEl.addEventListener('change', renderRows);
 
+  // ---- receipt selection (income list) ------------------------------------
+  function selectedRows() {
+    return currentRows.filter(function (r) { return selected[r.id]; });
+  }
+  // '' when the selection can go on one receipt, else the reason it cannot.
+  function selectionProblem(rows) {
+    var n30 = rows.filter(function (r) { return r.method === '+30'; }).length;
+    if (n30 > 0 && n30 < rows.length) return 'בחירה מעורבת: שורות +30 ושורות ששולמו ישירות — הפק קבלה נפרדת לכל סוג';
+    return '';
+  }
+  function renderSelBar() {
+    var rows = currentKind === 'income' ? selectedRows() : [];
+    if (!rows.length) { selBarEl.classList.add('hidden'); return; }
+    var total = 0;
+    rows.forEach(function (r) { total += Number(r.amount) || 0; });
+    var why = selectionProblem(rows);
+    selSumEl.innerHTML = 'נבחרו <b>' + rows.length + '</b> · סה"כ <b>' + money(total) + '</b>'
+      + (why ? '<br><span class="err">' + esc(why) + '</span>' : '');
+    selGoEl.disabled = !!why;
+    selBarEl.classList.remove('hidden');
+  }
+  function toggleSelect(id, on, rowEl) {
+    if (on) selected[id] = true; else delete selected[id];
+    if (rowEl) rowEl.classList.toggle('sel', !!on);
+    renderSelBar();
+  }
+  selGoEl.addEventListener('click', function () {
+    var rows = selectedRows();
+    if (!rows.length || selectionProblem(rows)) return;
+    openReceiptModal(rows);
+  });
+
   // ---- wiring ----
   homeEl.querySelector('[data-kind="income"]').addEventListener('click', function () { openList('income'); });
   homeEl.querySelector('[data-kind="expense"]').addEventListener('click', function () { openList('expense'); });
@@ -307,6 +398,9 @@
     if (!el) return;
     var idx = parseInt(el.getAttribute('data-idx'), 10);
     if (isNaN(idx) || !currentRows[idx]) return;
+    if (ev.target.closest('.badge.rcpt a')) return;                 // receipt link: let it open
+    var cb = ev.target.closest('.r-sel');
+    if (cb) { toggleSelect(currentRows[idx].id, cb.checked, el); return; }   // checkbox: select, don't open
     openDetail(currentKind, currentRows[idx], idx);
   });
 
@@ -352,7 +446,8 @@
     var h = '<div class="dd-readnote">רשומה מיובאת — לא ניתנת לעריכה כאן</div>';
     h += roField('תאריך', row.date) + roField('סכום', money(row.amount));
     if (kind === 'income') {
-      h += roField('שם הכנסה', row.name) + roField('דרך', row.via);
+      h += roField('שם הכנסה', row.name) + roField('דרך', row.via)
+        + roField('לקוח', row.customer) + roField('מייל לקוח', row.customerEmail);
     } else {
       h += roField('שם', row.name) + roField('סוג', row.category)
         + roField('מוכרת?', row.recognized ? 'עסקי מוכר' : 'לא');
@@ -369,6 +464,9 @@
     if (kind === 'income') {
       h += '<label for="dd-name">שם הכנסה</label><input id="dd-name" type="text" value="' + esc(row.name) + '">';
       h += '<label for="dd-via">דרך</label><input id="dd-via" type="text" list="dl-payers" value="' + esc(row.via) + '">';
+      h += '<label for="dd-cust">לקוח (לקבלה)</label><input id="dd-cust" type="text" value="' + esc(row.customer) + '">';
+      h += '<label for="dd-cemail">מייל לקוח</label><input id="dd-cemail" type="email" dir="ltr" inputmode="email" value="' + esc(row.customerEmail) + '">';
+      if (row.receiptNumber) h += roField('קבלה', '#' + row.receiptNumber);
     } else {
       h += '<label for="dd-name">שם</label><input id="dd-name" type="text" value="' + esc(row.name) + '">';
       h += '<label for="dd-cat">סוג</label><input id="dd-cat" type="text" list="dl-categories" value="' + esc(row.category) + '">';
@@ -545,6 +643,10 @@
     if (kind === 'income') {
       var viaV = (ddForm.querySelector('#dd-via').value || '').trim();
       if (viaV !== (row.via || ''))          changed.via = viaV;
+      var custV = (ddForm.querySelector('#dd-cust').value || '').trim();
+      if (custV !== (row.customer || ''))    changed.customer = custV;
+      var cemV = (ddForm.querySelector('#dd-cemail').value || '').trim();
+      if (cemV !== (row.customerEmail || '')) changed.customerEmail = cemV;
     } else {
       var catV = (ddForm.querySelector('#dd-cat').value || '').trim();
       if (catV !== (row.category || ''))     changed.category = catV;
@@ -582,6 +684,106 @@
     }).catch(function () {
       ddStatus('השמירה נכשלה — נסה שוב', 'err');
       if (saveBtn) saveBtn.disabled = false;
+    });
+  }
+
+  // ---- receipt modal (door B) ---------------------------------------------
+  function isEmail(s) { return /.+@.+\..+/.test(s || ''); }
+  function todayIso() {
+    var t = new Date();
+    return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
+  }
+  // Modal default: +30 rows were paid by bank transfer; a direct-paid row keeps its
+  // own method when it is one SUMIT knows (ביט -> Bit); anything else -> bank transfer.
+  function defaultMethod(rows) {
+    var methods = {};
+    rows.forEach(function (r) { methods[r.method || ''] = true; });
+    var keys = Object.keys(methods);
+    if (keys.length !== 1 || keys[0] === '+30') return 'העברה בנקאית';
+    var m = keys[0] === 'ביט' ? 'Bit' : keys[0];
+    return PAY_METHODS.indexOf(m) === -1 ? 'העברה בנקאית' : m;
+  }
+  // First non-empty value of a field across the selected rows.
+  function firstOf(rows, field, test) {
+    for (var i = 0; i < rows.length; i++) {
+      var v = String(rows[i][field] || '').trim();
+      if (v && (!test || test(v))) return v;
+    }
+    return '';
+  }
+  // A text/date field with a "חסר" mark when its prefill is empty.
+  function fieldHtml(id, label, type, value, extra) {
+    var missing = !value;
+    return '<label for="' + id + '">' + esc(label) + (missing ? '<span class="need">חסר</span>' : '') + '</label>'
+      + '<input type="' + type + '" id="' + id + '" class="' + (missing ? 'need' : '') + '" value="' + esc(value) + '"' + (extra || '') + '>';
+  }
+
+  function openReceiptModal(rows) {
+    var total = 0;
+    rows.forEach(function (r) { total += Number(r.amount) || 0; });
+    var def = defaultMethod(rows);
+    var names = rows.map(function (r) { return esc(r.name) + ' (' + esc(r.date) + ')'; }).join('<br>');
+    var modal = document.createElement('div');
+    modal.className = 'db-modal';
+    modal.innerHTML = [
+      '<div class="db-sheet">',
+      '  <h3>הפקת קבלה — ' + rows.length + ' שורות</h3>',
+      '  <dl>',
+      '    <dt>שורות</dt><dd>' + names + '</dd>',
+      '    <dt>סכום</dt><dd>' + money(total) + '</dd>',
+      '  </dl>',
+      fieldHtml('db-cust', 'לקוח', 'text', firstOf(rows, 'customer')),
+      fieldHtml('db-email', 'מייל לקוח', 'email', firstOf(rows, 'customerEmail', isEmail), ' dir="ltr" inputmode="email"'),
+      fieldHtml('db-paid', 'תאריך התשלום', 'date', todayIso(), ' max="' + todayIso() + '"'),
+      '  <label for="db-method">אופן תשלום</label>',
+      '  <select id="db-method">' + PAY_METHODS.map(function (m) {
+        return '<option' + (m === def ? ' selected' : '') + '>' + esc(m) + '</option>';
+      }).join('') + '</select>',
+      '  <p class="db-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית ותישלח ללקוח במייל. הלקוח והמייל יישמרו על השורות.</p>',
+      '  <div class="db-modal-status" id="db-modal-status"></div>',
+      '  <div class="db-acts">',
+      '    <button type="button" class="db-send">שלח</button>',
+      '    <button type="button" class="db-cancel">בטל</button>',
+      '  </div>',
+      '</div>'
+    ].join('\n');
+    screen.appendChild(modal);
+
+    var sendBtn = modal.querySelector('.db-send');
+    var statusEl = modal.querySelector('#db-modal-status');
+    function status(msg, cls) { statusEl.className = 'db-modal-status' + (cls ? ' ' + cls : ''); statusEl.textContent = msg || ''; }
+    function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    modal.querySelector('.db-cancel').addEventListener('click', close);
+
+    sendBtn.addEventListener('click', function () {
+      var name     = modal.querySelector('#db-cust').value.trim();
+      var mail     = modal.querySelector('#db-email').value.trim();
+      var paidDate = modal.querySelector('#db-paid').value;
+      var method   = modal.querySelector('#db-method').value;
+      var why = !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : !paidDate ? 'חסר תאריך תשלום' : '';
+      if (why) { status(why, 'err'); return; }
+
+      sendBtn.disabled = true;                 // no second submit while in flight
+      status('מפיק קבלה…', '');
+      var rowIds = rows.map(function (r) { return String(r.id); }).sort();
+      postAction({ token: token(), action: 'issueReceipt', rowIds: rowIds,
+                   customer: { name: name, email: mail }, payment: { date: paidDate, method: method } })
+        .then(function (r) {
+          if (r && r.ok && r.dryRun) {
+            status('מצב בדיקה: נוצרה טיוטה ב-SUMIT, דבר לא נרשם', 'ok');
+            sendBtn.disabled = false;
+          } else if (r && r.ok) {
+            close();
+            openList('income');                // redraw from the sheet: receipt badges, customer written back
+          } else {
+            status((r && (r.userMessage || r.error)) || 'הפקת הקבלה נכשלה — נסה שוב', 'err');
+            sendBtn.disabled = false;
+          }
+        })
+        .catch(function () {
+          status('אין חיבור — הקש שוב (לא תופק קבלה כפולה)', 'err');
+          sendBtn.disabled = false;
+        });
     });
   }
 

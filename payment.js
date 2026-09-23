@@ -7,7 +7,16 @@
    Flow: pick org (channel) -> pick month/year -> previewDoc shows the lines +
    total (the review step) -> הפק calls issueDoc, which mints the PDF, emails it
    to the channel, and logs it server-side. No email preview — send is immediate
-   on הפק. */
+   on הפק.
+
+   Receipt (door A of issueReceipt): once a request exists for the channel+month,
+   "הפק קבלה" opens a modal pre-filled from the demand — customer name, email,
+   payment date (today), payment method — with any missing field marked for
+   entry. Send calls issueReceipt with the demand's income row ids, the customer,
+   the payment and the demand serial; the server issues the legal receipt through
+   SUMIT, writes it onto the rows and marks the demand paid. Only two conditions
+   keep the button locked: a row already on another receipt, and a demand סכום
+   that differs from the row sum. The server re-validates everything. */
 (function () {
   "use strict";
   if (window.FinPay) return;             // guard: load + init exactly once
@@ -21,6 +30,7 @@
     { key: 'hila',  label: 'הילה' },
     { key: 'liran', label: 'לירן' }
   ];
+  var PAY_METHODS = ['העברה בנקאית', 'Bit', 'מזומן', 'אשראי'];   // same closed list as backend/Sumit.gs
   var HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני',
                     'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -52,7 +62,26 @@
     '.pay-issue{width:100%;margin-top:22px;padding:16px;font-size:18px;font-weight:700;color:#fff;border:0;border-radius:14px;cursor:pointer;background:#0f766e;font-family:inherit}',
     '.pay-issue:disabled{opacity:.45;cursor:default}',
     '.pay-status{min-height:24px;margin-top:14px;text-align:center;font-size:15px;font-weight:600}',
-    '.pay-status.ok{color:var(--green)}.pay-status.err{color:var(--err)}'
+    '.pay-status.ok{color:var(--green)}.pay-status.err{color:var(--err)}',
+    '.pay-rcpt{margin-top:26px;padding-top:18px;border-top:1px solid var(--line)}',
+    '.pay-rcpt-btn{width:100%;padding:16px;font-size:18px;font-weight:700;color:#fff;border:0;border-radius:14px;cursor:pointer;background:#1d4ed8;font-family:inherit}',
+    '.pay-rcpt-btn:disabled{opacity:.45;cursor:default}',
+    '.pay-rcpt-why{margin-top:8px;text-align:center;font-size:14px;color:var(--muted)}',
+    '.pay-rcpt-done{display:block;text-align:center;padding:14px;font-size:17px;font-weight:700;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;text-decoration:none}',
+    '.pay-modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}',
+    '.pay-sheet{width:100%;max-width:480px;background:var(--bg);border-radius:18px 18px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom))}',
+    '.pay-sheet h3{margin:0 0 12px;font-size:19px}',
+    '.pay-sheet dl{margin:0 0 14px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:15px}',
+    '.pay-sheet dt{color:var(--muted)}.pay-sheet dd{margin:0;font-weight:600;overflow-wrap:anywhere}',
+    '.pay-sheet label{display:block;font-size:14px;color:var(--muted);margin:10px 2px 6px}',
+    '.pay-sheet input,.pay-sheet select{width:100%}',
+    '.pay-sheet input.need{border-color:#dc2626;background:#fef2f2}',
+    '.pay-sheet label .need{color:#dc2626;font-weight:700;margin-inline-start:6px}',
+    '.pay-warn{margin:14px 0 0;font-size:14px;line-height:1.5;color:#9a3412}',
+    '.pay-acts{display:flex;gap:10px;margin-top:16px}',
+    '.pay-acts button{flex:1;padding:14px;font-size:17px;font-weight:700;border-radius:12px;cursor:pointer;font-family:inherit}',
+    '.pay-send{background:#1d4ed8;color:#fff;border:0}',
+    '.pay-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}'
   ].join('');
   var styleEl = document.createElement('style');
   styleEl.textContent = css;
@@ -193,8 +222,10 @@
       amber +
       '<div class="pay-rows">' + rows + '</div>' +
       '<div class="pay-total"><span>סה"כ</span><span>' + money(r.total) + '</span></div>' +
-      issueButton(false);
+      issueButton(false) +
+      receiptSection(r);
     wireIssue();
+    wireReceipt();
   }
 
   function recipientLine(recipient) {
@@ -236,6 +267,155 @@
       .catch(function () {
         setStatus('אין חיבור — נסה שוב', 'err');
         if (btn) btn.disabled = false;
+      });
+  }
+
+  // ---- receipt (הפק קבלה) ----
+  // Only the hard blocks lock the button; a missing customer field is collected
+  // in the modal instead. Client-side checks are UX only — issueReceipt re-checks.
+  function receiptLock(r) {
+    var d = r.demand;
+    if (!d) return 'טרם הופקה דרישת תשלום לחודש זה';
+    if (Math.abs((Number(d.total) || 0) - (Number(r.total) || 0)) >= 0.005) {
+      return 'סכום הדרישה (' + money(d.total) + ') שונה מסכום השורות (' + money(r.total) + ')';
+    }
+    var lines = r.lines || [], n30 = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i];
+      if (!ln.id) return 'שורות ללא מזהה — לא ניתן להפיק קבלה מהאפליקציה';
+      if (ln.receiptId && ln.receiptId !== (d.receiptId || '')) return 'שורה בדרישה כבר משויכת לקבלה אחרת';
+      if (ln.method === '+30') n30++;
+    }
+    if (n30 > 0 && n30 < lines.length) return 'בחירה מעורבת: שורות +30 ושורות ששולמו ישירות';
+    return '';
+  }
+  // Modal default: +30 rows were paid by bank transfer; a direct-paid row keeps its
+  // own method when it is one SUMIT knows (ביט -> Bit); anything else -> bank transfer.
+  function defaultMethod(lines) {
+    var methods = {};
+    lines.forEach(function (ln) { methods[ln.method || ''] = true; });
+    var keys = Object.keys(methods);
+    if (keys.length !== 1 || keys[0] === '+30') return 'העברה בנקאית';
+    var m = keys[0] === 'ביט' ? 'Bit' : keys[0];
+    return PAY_METHODS.indexOf(m) === -1 ? 'העברה בנקאית' : m;
+  }
+
+  function receiptSection(r) {
+    var d = r.demand, inner;
+    if (d && d.receiptNumber) {
+      inner = d.receiptUrl
+        ? '<a class="pay-rcpt-done" href="' + esc(d.receiptUrl) + '" target="_blank" rel="noopener">קבלה #' + esc(d.receiptNumber) + '</a>'
+        : '<div class="pay-rcpt-done">קבלה #' + esc(d.receiptNumber) + '</div>';
+    } else {
+      var why = receiptLock(r);
+      inner = '<button class="pay-rcpt-btn" id="pay-rcpt"' + (why ? ' disabled' : '') + '>הפק קבלה</button>'
+        + (why ? '<div class="pay-rcpt-why">' + esc(why) + '</div>' : '')
+        + '<div class="pay-status" id="pay-rcpt-status"></div>';
+    }
+    return '<div class="pay-rcpt">' + inner + '</div>';
+  }
+
+  function wireReceipt() {
+    var btn = previewEl.querySelector('#pay-rcpt');
+    if (btn && !btn.disabled) btn.addEventListener('click', confirmReceipt);
+  }
+
+  function setRcptStatus(msg, cls) {
+    var s = previewEl.querySelector('#pay-rcpt-status');
+    if (s) { s.className = 'pay-status' + (cls ? ' ' + cls : ''); s.textContent = msg || ''; }
+  }
+
+  function todayIso() {
+    var t = new Date();
+    return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
+  }
+
+  function isEmail(s) { return /.+@.+\..+/.test(s || ''); }
+
+  // A text/date field with a "חסר" mark when its prefill is empty.
+  function fieldHtml(id, label, type, value, extra) {
+    var missing = !value;
+    return '<label for="' + id + '">' + esc(label) + (missing ? '<span class="need">חסר</span>' : '') + '</label>'
+      + '<input type="' + type + '" id="' + id + '" class="' + (missing ? 'need' : '') + '" value="' + esc(value) + '"' + (extra || '') + '>';
+  }
+
+  function confirmReceipt() {
+    var r = lastPreview;
+    if (!r || !r.demand || r.demand.receiptNumber) return;
+    var d = r.demand;
+    var email = isEmail(d.email) ? d.email : '';
+    var def = defaultMethod(r.lines || []);
+    var modal = document.createElement('div');
+    modal.className = 'pay-modal';
+    modal.innerHTML = [
+      '<div class="pay-sheet">',
+      '  <h3>הפקת קבלה — דרישה ' + esc(d.serial) + '</h3>',
+      '  <dl>',
+      '    <dt>סכום</dt><dd>' + money(d.total) + '</dd>',
+      '    <dt>שורות</dt><dd>' + esc(r.count) + '</dd>',
+      '  </dl>',
+      fieldHtml('pay-cust', 'לקוח', 'text', r.recipient || ''),
+      fieldHtml('pay-email', 'מייל לקוח', 'email', email, ' dir="ltr" inputmode="email"'),
+      fieldHtml('pay-paid', 'תאריך התשלום', 'date', todayIso(), ' max="' + todayIso() + '"'),
+      '  <label for="pay-method">אופן תשלום</label>',
+      '  <select id="pay-method">' + PAY_METHODS.map(function (m) {
+        return '<option' + (m === def ? ' selected' : '') + '>' + esc(m) + '</option>';
+      }).join('') + '</select>',
+      '  <p class="pay-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית, תישלח ללקוח במייל, והדרישה תסומן כשולמה.</p>',
+      '  <div class="pay-status" id="pay-modal-status"></div>',
+      '  <div class="pay-acts">',
+      '    <button type="button" class="pay-send">שלח</button>',
+      '    <button type="button" class="pay-cancel">בטל</button>',
+      '  </div>',
+      '</div>'
+    ].join('\n');
+    screen.appendChild(modal);
+
+    function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    modal.querySelector('.pay-cancel').addEventListener('click', close);
+    modal.querySelector('.pay-send').addEventListener('click', function () {
+      var name     = modal.querySelector('#pay-cust').value.trim();
+      var mail     = modal.querySelector('#pay-email').value.trim();
+      var paidDate = modal.querySelector('#pay-paid').value;
+      var method   = modal.querySelector('#pay-method').value;
+      var st = modal.querySelector('#pay-modal-status');
+      var why = !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : !paidDate ? 'חסר תאריך תשלום' : '';
+      if (why) { st.className = 'pay-status err'; st.textContent = why; return; }
+      close();
+      issueReceipt({
+        rowIds:       (r.lines || []).map(function (ln) { return ln.id; }),
+        customer:     { name: name, email: mail },
+        payment:      { date: paidDate, method: method },
+        demandSerial: d.serial
+      });
+    });
+  }
+
+  function issueReceipt(req) {
+    var btn = previewEl.querySelector('#pay-rcpt');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;                       // no second submit while in flight
+    setRcptStatus('מפיק קבלה…', '');
+    var seq = reqSeq;                          // the user may switch channel/month meanwhile
+
+    post({ token: token(), action: 'issueReceipt',
+           rowIds: req.rowIds, customer: req.customer, payment: req.payment, demandSerial: req.demandSerial })
+      .then(function (r) {
+        if (seq !== reqSeq) return;
+        if (r && r.ok && r.dryRun) {
+          setRcptStatus('מצב בדיקה: נוצרה טיוטה ב-SUMIT, דבר לא נרשם', 'ok');
+          btn.disabled = false;
+        } else if (r && r.ok) {
+          runPreview();                        // issued / alreadyIssued -> redraw in the issued state
+        } else {
+          setRcptStatus((r && (r.userMessage || r.error)) || 'הפקת הקבלה נכשלה — נסה שוב', 'err');
+          btn.disabled = false;
+        }
+      })
+      .catch(function () {
+        if (seq !== reqSeq) return;
+        setRcptStatus('אין חיבור — הקש שוב (לא תופק קבלה כפולה)', 'err');
+        btn.disabled = false;
       });
   }
 
