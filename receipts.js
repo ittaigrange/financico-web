@@ -52,6 +52,7 @@
     '.rc-sheet input,.rc-sheet select{width:100%;padding:13px;font-size:16px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);outline:none;font-family:inherit}',
     '.rc-sheet input.need{border-color:#fca5a5}',
     '.rc-sheet input.rc-amount{font-size:26px;font-weight:700;text-align:center}',
+    '.rc-month{display:flex;flex-direction:column;gap:8px;margin-top:12px}',
     '.rc-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:14px 0 0}',
     '.rc-status{min-height:22px;margin-top:10px;text-align:center;font-size:14px;font-weight:600}',
     '.rc-status.ok{color:var(--green)}.rc-status.err{color:var(--err)}',
@@ -75,6 +76,15 @@
     return '₪' + (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('he-IL', { maximumFractionDigits: 2 });
   }
   function isEmail(s) { return /.+@.+\..+/.test(s || ''); }
+  var HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני',
+                    'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  // "yyyy-mm" -> "יולי 2026" — the same label the server appends to the receipt.
+  function monthLabel(v) {
+    var m = /^(\d{4})-(\d{2})$/.exec(v || '');
+    if (!m) return '';
+    var i = Number(m[2]) - 1;
+    return HEB_MONTHS[i] ? HEB_MONTHS[i] + ' ' + m[1] : '';
+  }
   function todayIso() {
     var t = new Date();
     return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
@@ -173,6 +183,10 @@
       '  <label for="rc-amount">סכום (₪)</label>',
       '  <input type="number" id="rc-amount" class="rc-amount" inputmode="decimal" min="0" step="any" value="">',
       fieldHtml('rc-for', 'עבור (הפירוט שיופיע בקבלה)', 'text', ''),
+      '  <div class="rc-month">',
+      '    <button type="button" class="date-btn" id="rc-month-btn">📆 ללא חודש</button>',
+      '    <input type="month" id="rc-month" class="hidden">',
+      '  </div>',
       fieldHtml('rc-cust', 'לקוח', 'text', ''),
       fieldHtml('rc-email', 'מייל לקוח', 'email', '', ' dir="ltr" inputmode="email"'),
       fieldHtml('rc-paid', 'תאריך התשלום', 'date', todayIso(), ' max="' + todayIso() + '"'),
@@ -189,6 +203,22 @@
       '</div>'
     ].join('\n');
     screenEl.appendChild(modal);
+
+    // Optional "for which month". Starts empty and stays empty unless picked — the
+    // receipt then carries no month line at all, rather than a guessed one.
+    var monthInput = modal.querySelector('#rc-month');
+    var monthBtn   = modal.querySelector('#rc-month-btn');
+    function refreshMonthBtn(){
+      var v = monthInput.value;
+      monthBtn.textContent = '📆 ' + (v ? monthLabel(v) : 'ללא חודש');
+      monthBtn.classList.toggle('on', !!v);
+    }
+    monthBtn.addEventListener('click', function () {
+      var wasHidden = monthInput.classList.contains('hidden');
+      monthInput.classList.toggle('hidden', !wasHidden);
+      if (wasHidden) { try { monthInput.showPicker(); } catch (e) { monthInput.focus(); } }
+    });
+    monthInput.addEventListener('change', refreshMonthBtn);
 
     var sheet    = modal.querySelector('.rc-sheet');
     var sendBtn  = modal.querySelector('.rc-send');
@@ -228,9 +258,10 @@
       if (why) { status(why, 'err'); return; }
 
       sendBtn.disabled = true;           // no second submit while in flight
-      status('מפיק קבלה של ' + money(amount) + '…', '');
+      var monthVal = monthInput.value;
+      status('מפיק קבלה של ' + money(amount) + (monthVal ? ' עבור ' + monthLabel(monthVal) : '') + '…', '');
       post({ token: token(), action: 'issueGeneralReceipt',
-             amount: amount, description: forWhat,
+             amount: amount, description: forWhat, month: monthVal,
              customer: { name: name, email: mail },
              payment: { date: paid, method: method },
              ref: ref })
