@@ -59,6 +59,10 @@
     '    <form id="form-income" class="form hidden" autocomplete="off">',
     '      <label for="i-amount">סכום (₪)</label>',
     '      <input id="i-amount" class="amount" type="number" inputmode="decimal" min="0" step="any" required>',
+    '      <div class="datepick" id="i-datepick">',
+    '        <button type="button" class="date-btn" id="i-date-btn">📅 היום</button>',
+    '        <input type="date" id="i-date" class="hidden">',
+    '      </div>',
     '      <label for="i-name">שם הכנסה</label>',
     '      <input id="i-name" type="text" required>',
     '      <label for="i-payer">דרך</label>',
@@ -299,6 +303,42 @@
     });
   });
 
+  // ---- income date: today by default, changeable ----
+  // The row is dated by the server clock unless a date is picked here. A picked date
+  // is sent as "yyyy-mm-ddT12:00:00" — no trailing Z, so Apps Script parses it in the
+  // script's own timezone, and midday keeps the date whole whatever the offset.
+  function isoToday(){
+    var t = new Date();
+    return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
+  }
+  function heDate(iso){
+    var p = iso.split('-');
+    return p[2] + '/' + p[1] + '/' + p[0];
+  }
+  var dateInput = document.getElementById('i-date');
+  var dateBtn   = document.getElementById('i-date-btn');
+  function refreshDateBtn(){
+    if (!dateInput.value) dateInput.value = isoToday();   // a cleared picker means today
+    var custom = dateInput.value !== isoToday();
+    dateBtn.textContent = '📅 ' + (custom ? heDate(dateInput.value) : 'היום');
+    dateBtn.classList.toggle('on', custom);
+  }
+  function resetDate(){
+    dateInput.value = isoToday();      // recomputed, so an app left open past midnight is right
+    dateInput.classList.add('hidden');
+    refreshDateBtn();
+  }
+  dateBtn.addEventListener('click', function(){
+    var wasHidden = dateInput.classList.contains('hidden');
+    dateInput.classList.toggle('hidden', !wasHidden);
+    if (wasHidden){
+      if (!dateInput.value) dateInput.value = isoToday();
+      try { dateInput.showPicker(); } catch(e){ dateInput.focus(); }
+    }
+  });
+  dateInput.addEventListener('change', refreshDateBtn);
+  resetDate();
+
   // Tweak A — fill אופן תשלום from דרך only when method is empty; never overwrite.
   var payerInput  = document.getElementById('i-payer');
   var methodInput = document.getElementById('i-method');
@@ -342,7 +382,7 @@
     build: function(){
       var amount = parseFloat(document.getElementById('i-amount').value);
       var name = document.getElementById('i-name').value.trim();
-      return {
+      var payload = {
         token: token(), stream:'income', amount: amount, name: name,
         payer: document.getElementById('i-payer').value.trim(),
         method: document.getElementById('i-method').value.trim(),
@@ -350,9 +390,14 @@
         note: document.getElementById('i-note').value.trim(),
         raw: name + ' ' + amount
       };
+      // Only a date the user actually changed is sent; "today" is left to the
+      // server clock, which keeps the time of day and so the order within a day.
+      var picked = dateInput.value;
+      if (picked && picked !== isoToday()) payload.date = picked + 'T12:00:00';
+      return payload;
     },
     remember: function(p){ addToList('fin_payers', p.payer); addToList('fin_methods', p.method); },
-    afterReset: function(){}
+    afterReset: resetDate
   });
 
   // ---- in-app nav (relative, same-origin, stays standalone/full-screen) ----
