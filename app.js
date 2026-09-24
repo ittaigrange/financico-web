@@ -23,7 +23,8 @@
     '      <a class="c-income"  href="./income/">＋ הכנסה</a>',
     '      <a class="c-expense" href="./expense/">－ הוצאה</a>',
     '      <button class="c-data" id="c-data" type="button">📊 נתונים</button>',
-    '      <button class="c-pay" id="c-pay" type="button">🧾 דרישת תשלום</button>',
+    '      <button class="c-pay" id="c-pay" type="button">📄 דרישת תשלום</button>',
+    '      <button class="c-rcpt" id="c-rcpt" type="button">🧾 הפק קבלות</button>',
     '    </section>',
     '    <form id="form-expense" class="form hidden" autocomplete="off">',
     '      <label for="e-amount">סכום (₪)</label>',
@@ -437,6 +438,22 @@
       s.src = base + 'payment.js';
       s.onload  = function(){ if (window.FinPay) window.FinPay.open(); };
       s.onerror = function(){ alert('טעינת דרישת התשלום נכשלה — בדוק חיבור'); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // ---- receipts section (lazy: only fetch receipts.js when first tapped) ----
+  // The hub over the three receipt doors: from income rows, from a demand, or a
+  // free receipt. It loads db.js / payment.js itself when one of those is chosen.
+  var rcptBtn = document.getElementById('c-rcpt');
+  if (rcptBtn){
+    rcptBtn.addEventListener('click', function(){
+      if (window.FinRcpt){ window.FinRcpt.open(); return; }
+      var base = window.FIN_TYPE ? '../' : './';
+      var s = document.createElement('script');
+      s.src = base + 'receipts.js';
+      s.onload  = function(){ if (window.FinRcpt) window.FinRcpt.open(); };
+      s.onerror = function(){ alert('טעינת הפקת הקבלות נכשלה — בדוק חיבור'); };
       document.head.appendChild(s);
     });
   }

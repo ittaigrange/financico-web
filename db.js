@@ -787,13 +787,17 @@
     });
   }
 
-  // ---- public entry (called by app.js) ----
+  // ---- public entry (called by app.js, and by receipts.js with 'income') ----
+  // open()          -> the three tiles.
+  // open('income')  -> straight to the income list, where receipt rows are picked
+  //                    (the הפקת קבלות screen's "הפק מהכנסה" door).
   window.FinDB = {
-    open: function () {
+    open: function (kind) {
       var wrap = document.querySelector('.wrap');
       if (wrap) wrap.classList.add('hidden');
       screen.classList.remove('hidden');
-      showHome();
+      if (kind === 'income' || kind === 'expense') openList(kind);
+      else showHome();
     }
   };
 })();

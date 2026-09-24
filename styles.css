@@ -64,13 +64,14 @@ input.amount{font-size:30px;font-weight:700;text-align:center;letter-spacing:.5p
 .hidden{display:none!important}
 
 .chooser{display:flex;flex-direction:column;gap:16px;padding:8px 0}
-.chooser a,.chooser .c-data{
+.chooser a,.chooser button{
   display:flex;align-items:center;justify-content:center;text-decoration:none;
   font-weight:800;color:#fff;border-radius:18px;border:0;cursor:pointer
 }
 .chooser a{font-size:26px;height:120px}
-.chooser .c-data,.chooser .c-pay{font-size:20px;height:64px;font-family:inherit}
+.chooser button{font-size:20px;height:64px;font-family:inherit}
 .chooser .c-data{background:#475569} .chooser .c-pay{background:#0f766e}
+.chooser .c-rcpt{background:#b45309}
 .chooser .c-income{background:var(--green)} .chooser .c-expense{background:var(--blue)}
 .chooser .brand{text-align:center;color:var(--muted);margin:6px 0 2px;font-size:15px}
 
