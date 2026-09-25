@@ -2,7 +2,11 @@
    Lazy-loaded by app.js the first time the user taps "נתונים" on the chooser,
    so it never weighs on the main logging screen. Self-contained: reads the
    endpoint/token from localStorage (same keys as app.js), renders its own
-   full-screen view over the main app, and is purely read-only this stage.
+   full-screen view over the main app. Rows open into an edit view (updateRow).
+
+   Delete (expense list): rows that carry a מזהה get a checkbox; a small 🗑 in the
+   header deletes every checked row after one confirm (deleteRows — expense only,
+   matched by מזהה, rows removed from the sheet outright).
 
    Views: home (three tiles) -> list (income | expense). Back from a list
    returns to home; back from home returns to the main logging app.
@@ -100,7 +104,14 @@
     '.db-send{background:#1d4ed8;color:#fff;border:0}',
     '.db-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}',
     '.db-modal-status{min-height:22px;margin-top:10px;text-align:center;font-size:15px;font-weight:600}',
-    '.db-modal-status.err{color:var(--err)}.db-modal-status.ok{color:var(--green)}'
+    '.db-modal-status.err{color:var(--err)}.db-modal-status.ok{color:var(--green)}',
+    // --- delete (expense list): header icon + per-row checkboxes ---
+    '.db-trash{position:relative;background:rgba(255,255,255,.18);border:0;color:#fff;width:38px;height:38px;border-radius:10px;font-size:18px;line-height:1;cursor:pointer;font-family:inherit;padding:0}',
+    '.db-trash:disabled{opacity:.4;cursor:default}',
+    '.db-trash .n{position:absolute;top:-5px;left:-5px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#dc2626;color:#fff;font-size:11px;font-weight:800;line-height:18px;box-sizing:border-box}',
+    '.db-row.del{border-color:#dc2626;background:#fef2f2}',
+    '.r-sel.r-delsel{accent-color:#dc2626}',
+    '.db-delmsg{color:var(--err);font-size:14px;font-weight:600;margin:0 2px 10px}'
   ].join('');
   var PAY_METHODS = ['העברה בנקאית', 'Bit', 'מזומן', 'אשראי'];   // same closed list as backend/Sumit.gs
   var styleEl = document.createElement('style');
@@ -114,6 +125,7 @@
     '<div class="db-head">',
     '  <button class="db-back" id="db-back">חזרה</button>',
     '  <h2 id="db-title">מסד נתונים</h2>',
+    '  <button class="db-trash hidden" id="db-trash" type="button" aria-label="מחק מסומנות" title="מחק מסומנות" disabled>🗑</button>',
     '</div>',
     '<div class="db-body">',
     '  <section class="db-home" id="db-home">',
@@ -125,6 +137,7 @@
     '    <div class="db-filter hidden" id="db-filter"><label><input type="checkbox" id="db-filter-missing"> הצג רק חסרות קבלה</label></div>',
     '    <div class="db-state hidden" id="db-state"></div>',
     '    <div class="db-count hidden" id="db-count"></div>',
+    '    <div class="db-delmsg hidden" id="db-delmsg"></div>',
     '    <div class="db-rows" id="db-rows"></div>',
     '    <div class="db-selbar hidden" id="db-selbar"><div class="sum" id="db-selsum"></div><button type="button" id="db-selgo">הפק קבלה</button></div>',
     '  </section>',
@@ -151,6 +164,8 @@
   var selBarEl = screen.querySelector('#db-selbar');
   var selSumEl = screen.querySelector('#db-selsum');
   var selGoEl  = screen.querySelector('#db-selgo');
+  var trashEl  = screen.querySelector('#db-trash');
+  var delMsgEl = screen.querySelector('#db-delmsg');
   var detailEl = screen.querySelector('#db-detail');
   var ddBack   = screen.querySelector('#dd-back');
   var ddTitle  = screen.querySelector('#dd-title');
@@ -160,7 +175,9 @@
   var currentKind = null;     // 'income' | 'expense'
   var currentRows = [];       // the rows backing the current list (full objects)
   var detailState = { kind: null, idx: -1, row: null, editable: false };
-  var selected = {};          // income rows picked for a receipt: id -> true
+  var selected = {};          // rows picked on the current list: id -> true
+                              // (income: for a receipt; expense: for deletion)
+  var deleting = false;       // a deleteRows call is in flight
 
   // ---- helpers ----
   function esc(s) {
@@ -239,9 +256,16 @@
     return '<span class="badge rcpt">' + (r.receiptUrl
       ? '<a href="' + esc(r.receiptUrl) + '" target="_blank" rel="noopener">' + label + '</a>' : label) + '</span>';
   }
+  // An expense row can be marked for deletion when it has a מזהה (imported rows have
+  // none, and the server matches by מזהה only).
+  function deletable(r) {
+    return !!(r.id && String(r.id).trim() !== '');
+  }
   function rowInner(kind, r) {
     var check = (kind === 'income' && selectable(r))
       ? '<input type="checkbox" class="r-sel" aria-label="בחר לקבלה"' + (selected[r.id] ? ' checked' : '') + '>'
+      : (kind === 'expense' && deletable(r))
+      ? '<input type="checkbox" class="r-sel r-delsel" aria-label="סמן למחיקה"' + (selected[r.id] ? ' checked' : '') + '>'
       : '';
     var head = '<div class="r-main">' + check + '<span class="r-name">' + esc(r.name) + '</span>'
       + '<span class="r-amt">' + money(r.amount) + '</span></div>';
@@ -260,7 +284,8 @@
       + badge + missing + '</div>';
   }
   function rowHtml(kind, r, idx) {
-    return '<div class="db-row' + (selected[r.id] ? ' sel' : '') + '" data-kind="' + kind + '" data-id="' + esc(r.id)
+    var mark = selected[r.id] ? (kind === 'expense' ? ' del' : ' sel') : '';
+    return '<div class="db-row' + mark + '" data-kind="' + kind + '" data-id="' + esc(r.id)
       + '" data-idx="' + idx + '">' + rowInner(kind, r) + '</div>';
   }
 
@@ -293,6 +318,8 @@
     homeEl.classList.remove('hidden');
     setState(null);
     rowsEl.innerHTML = '';
+    selected = {};
+    renderTrash();
   }
 
   function openList(kind) {
@@ -305,6 +332,8 @@
     filterEl.classList.toggle('hidden', kind !== 'expense'); // missing-photo filter: expense only
     selected = {};
     renderSelBar();
+    renderTrash();
+    setDelMsg('');
     setState('loading');
 
     if (!endpoint() || !token()) { setState('nosettings'); return; }
@@ -370,8 +399,78 @@
   }
   function toggleSelect(id, on, rowEl) {
     if (on) selected[id] = true; else delete selected[id];
-    if (rowEl) rowEl.classList.toggle('sel', !!on);
+    if (rowEl) rowEl.classList.toggle(currentKind === 'expense' ? 'del' : 'sel', !!on);
     renderSelBar();
+    renderTrash();
+  }
+
+  // ---- delete (expense list) ----------------------------------------------
+  // The 🗑 lives in the header and shows only on the expense list; it is enabled
+  // once at least one row is marked, and carries the count.
+  function markedRows() {
+    return currentKind === 'expense' ? currentRows.filter(function (r) { return selected[r.id]; }) : [];
+  }
+  function renderTrash() {
+    var onList = view === 'list' && currentKind === 'expense';
+    trashEl.classList.toggle('hidden', !onList);
+    var n = onList ? markedRows().length : 0;
+    trashEl.disabled = n === 0 || deleting;
+    trashEl.innerHTML = '🗑' + (n ? '<span class="n">' + n + '</span>' : '');
+  }
+  function setDelMsg(msg) {
+    delMsgEl.textContent = msg || '';
+    delMsgEl.classList.toggle('hidden', !msg);
+  }
+  trashEl.addEventListener('click', function () {
+    var rows = markedRows();
+    if (!rows.length || deleting) return;
+    var total = 0;
+    rows.forEach(function (r) { total += Number(r.amount) || 0; });
+    var list = rows.slice(0, 8).map(function (r) {
+      return '• ' + (r.name || 'ללא שם') + ' · ' + String(r.amount) + ' ₪ · ' + (r.date || '');
+    }).join('\n') + (rows.length > 8 ? '\n… ועוד ' + (rows.length - 8) : '');
+    var photos = rows.filter(function (r) { return r.receipt; }).length;
+    var q = (rows.length === 1 ? 'למחוק הוצאה אחת?' : 'למחוק ' + rows.length + ' הוצאות?')
+      + '\nסה"כ ' + total.toLocaleString('he-IL', { maximumFractionDigits: 2 }) + ' ₪\n\n' + list
+      + '\n\nהשורות יימחקו מהגיליון.' + (photos ? ' תמונות הקבלה יועברו לאשפה.' : '');
+    if (!confirm(q)) return;
+
+    deleting = true;
+    setDelMsg('');
+    renderTrash();
+    var ids = rows.map(function (r) { return String(r.id); });
+    Array.prototype.forEach.call(rowsEl.querySelectorAll('.db-row'), function (el) {
+      if (selected[el.getAttribute('data-id')]) el.style.opacity = '.45';
+    });
+    postAction({ token: token(), action: 'deleteRows', sheet: 'expense', ids: ids })
+      .then(function (r) {
+        deleting = false;
+        if (!r || !r.ok) {
+          setDelMsg('המחיקה נכשלה — שום שורה לא נמחקה' + (r && (r.reason || r.error) ? ' (' + (r.reason || r.error) + ')' : ''));
+          renderRows(); renderTrash();
+          return;
+        }
+        // deleted + notFound are both gone from the sheet now; drop them from the list.
+        var gone = {};
+        (r.deleted || []).concat(r.notFound || []).forEach(function (id) { gone[String(id)] = true; });
+        currentRows = currentRows.filter(function (x) { return !gone[String(x.id)]; });
+        Object.keys(gone).forEach(function (id) { delete selected[id]; });
+        if (currentKind !== 'expense') return;               // user left the list meanwhile
+        if (currentRows.length === 0) { rowsEl.innerHTML = ''; setState('empty'); }
+        else renderRows();
+        renderTrash();
+      })
+      .catch(function () {
+        deleting = false;
+        setDelMsg('אין חיבור — ייתכן שהמחיקה לא הושלמה. טוען מחדש…');
+        openListKeepMsg('expense');
+      });
+  });
+  // After a lost answer the truth is on the sheet: reload the list, keep the note.
+  function openListKeepMsg(kind) {
+    var msg = delMsgEl.textContent;
+    openList(kind);
+    setDelMsg(msg);
   }
   selGoEl.addEventListener('click', function () {
     var rows = selectedRows();
@@ -620,6 +719,7 @@
   function closeDetail() {
     detailEl.classList.add('hidden');
     view = 'list';
+    renderTrash();
   }
 
   function ddStatus(msg, cls) {
