@@ -266,7 +266,16 @@
       var payload = opts.build();
       try {
         var r = await postEntry(payload);
-        if (r && r.ok){
+        if (r && r.ok && r.receiptError){
+          // Row saved, photo didn't — say so and say why (stays on screen).
+          status.className = 'status err';
+          status.textContent = 'נשמר ✓ — אבל הקבלה לא הועלתה (' + r.receiptError + '). אפשר לצרף אותה מ־📊 נתונים.';
+          opts.remember(payload);
+          refreshDatalists();
+          form.reset();
+          opts.afterReset();
+          amount.focus();
+        } else if (r && r.ok){
           status.className = 'status ok';
           status.textContent = 'נשמר ✓';
           opts.remember(payload);
@@ -511,5 +520,35 @@
     window.addEventListener('load', function(){
       navigator.serviceWorker.register(swPath, { scope: swScope }).catch(function(){});
     });
+
+    // Apply an update on the FIRST reopen instead of the second.
+    // sw.js calls skipWaiting() then clients.claim(), so a new worker takes charge of
+    // this already-open page — but the page is still running whatever the OLD cache
+    // served it. 'controllerchange' is exactly that handover, so reloading there picks
+    // the new files up straight away. Three guards:
+    //   1. only when a worker was already in control — never on a first-ever install,
+    //      where there is nothing stale to replace;
+    //   2. once, so a reload can never loop;
+    //   3. never while something is half-typed. Losing a part-entered הכנסה, or a
+    //      receipt modal mid-flight, to a silent reload would be worse than waiting
+    //      one more restart for the update.
+    var swReloading = false;
+    function busyTyping(){
+      if (document.querySelector('.rc-modal, .db-modal, .pay-modal')) return true;  // a modal is open
+      var inputs = document.querySelectorAll('.form input');
+      for (var i = 0; i < inputs.length; i++){
+        var el = inputs[i];
+        // Only fields the user fills: the date picker always carries today's date.
+        if (/^(text|number|email)$/.test(el.type) && String(el.value || '').trim() !== '') return true;
+      }
+      return false;
+    }
+    if (navigator.serviceWorker.controller){
+      navigator.serviceWorker.addEventListener('controllerchange', function(){
+        if (swReloading || busyTyping()) return;
+        swReloading = true;
+        location.reload();
+      });
+    }
   }
 })();

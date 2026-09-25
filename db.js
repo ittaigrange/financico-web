@@ -533,7 +533,10 @@
         return uploadReceipt(dataUrl);
       }).then(function (up) {
         if (!up || !up.ok) {
-          setStatus('העלאה נכשלה' + (up && up.reason ? ' (' + esc(up.reason) + ')' : ''), 'err');
+          // Show everything the server said: the short reason and the underlying
+          // error text (textContent, so no escaping needed).
+          var detail = up ? [up.reason, up.error].filter(Boolean).join(': ') : 'אין תשובה מהשרת';
+          setStatus('העלאה נכשלה' + (detail ? ' (' + detail + ')' : ''), 'err');
           return;
         }
         var oldRef = row.receipt;
