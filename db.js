@@ -67,6 +67,11 @@
     '.dd-status.err{color:var(--err)}.dd-status.ok{color:var(--green)}',
     '.badge.miss{background:#fff7ed;color:#9a3412}',
     '.db-filter{display:flex;align-items:center;gap:8px;margin:0 2px 12px;font-size:14px;color:var(--muted)}',
+    // --- sort toggle (income list): תאריך | דרך ---
+    '.db-sort{display:flex;align-items:center;gap:10px;margin:0 2px 12px;font-size:14px;color:var(--muted)}',
+    '.db-sort .seg{display:flex;border:1.5px solid var(--line);border-radius:10px;overflow:hidden}',
+    '.db-sort .seg button{background:var(--card);border:0;color:var(--ink);padding:7px 16px;font-size:14px;cursor:pointer;font-family:inherit}',
+    '.db-sort .seg button.on{background:#475569;color:#fff;font-weight:700}',
     '.dd-rcpt{margin-top:10px}',
     '.rcpt-actions{display:flex;gap:8px}',
     '.rcpt-btn{flex:1;padding:11px;font-size:14px;border:1.5px solid var(--line);background:var(--card);border-radius:10px;cursor:pointer;color:var(--ink);font-family:inherit}',
@@ -135,6 +140,7 @@
     '  </section>',
     '  <section class="db-list hidden" id="db-list">',
     '    <div class="db-filter hidden" id="db-filter"><label><input type="checkbox" id="db-filter-missing"> הצג רק חסרות קבלה</label></div>',
+    '    <div class="db-sort hidden" id="db-sort">מיון: <div class="seg"><button type="button" data-sort="date" class="on">תאריך</button><button type="button" data-sort="via">דרך</button></div></div>',
     '    <div class="db-state hidden" id="db-state"></div>',
     '    <div class="db-count hidden" id="db-count"></div>',
     '    <div class="db-delmsg hidden" id="db-delmsg"></div>',
@@ -161,6 +167,7 @@
   var rowsEl  = screen.querySelector('#db-rows');
   var filterEl = screen.querySelector('#db-filter');
   var filterMissingEl = screen.querySelector('#db-filter-missing');
+  var sortEl   = screen.querySelector('#db-sort');
   var selBarEl = screen.querySelector('#db-selbar');
   var selSumEl = screen.querySelector('#db-selsum');
   var selGoEl  = screen.querySelector('#db-selgo');
@@ -178,6 +185,7 @@
   var selected = {};          // rows picked on the current list: id -> true
                               // (income: for a receipt; expense: for deletion)
   var deleting = false;       // a deleteRows call is in flight
+  var sortBy = 'date';        // income list order: 'date' (newest first) | 'via' (by דרך, then newest first)
 
   // ---- helpers ----
   function esc(s) {
@@ -330,6 +338,8 @@
     rowsEl.innerHTML = '';
     filterMissingEl.checked = false;
     filterEl.classList.toggle('hidden', kind !== 'expense'); // missing-photo filter: expense only
+    setSort('date');
+    sortEl.classList.toggle('hidden', kind !== 'income');    // sort toggle: income only
     selected = {};
     renderSelBar();
     renderTrash();
@@ -356,15 +366,30 @@
   }
 
   // Re-draws #db-rows from currentRows, applying the missing-photo filter when
-  // active on the expense list. data-idx always refers to the row's index in
-  // currentRows (not its filtered position), so tap-to-open keeps working.
+  // active on the expense list, and the chosen order on the income list.
+  // currentRows itself stays newest-first; ordering is applied to the drawn
+  // list only, so data-idx always refers to the row's index in currentRows
+  // (not its drawn position) and tap-to-open keeps working.
   function renderRows() {
     var missingOnly = currentKind === 'expense' && filterMissingEl.checked;
+    var byVia = currentKind === 'income' && sortBy === 'via';
     var visible = [];
     currentRows.forEach(function (r, i) {
       if (missingOnly && !(r.recognized && !r.receipt)) return;
       visible.push({ r: r, i: i });
     });
+    if (byVia) {
+      // group by דרך (Hebrew collation, blank דרך last); newest first within a group
+      visible.sort(function (a, b) {
+        var va = String(a.r.via || '').trim(), vb = String(b.r.via || '').trim();
+        if (va !== vb) {
+          if (!va) return 1;
+          if (!vb) return -1;
+          return va.localeCompare(vb, 'he');
+        }
+        return dateKey(b.r.date) - dateKey(a.r.date);
+      });
+    }
     countEl.className = 'db-count';
     if (visible.length === 0 && missingOnly) {
       rowsEl.innerHTML = '';
@@ -372,9 +397,23 @@
       return;
     }
     rowsEl.innerHTML = visible.map(function (x) { return rowHtml(currentKind, x.r, x.i); }).join('');
-    countEl.textContent = visible.length + ' רשומות' + (missingOnly ? ' (חסרות קבלה)' : '');
+    countEl.textContent = visible.length + ' רשומות' + (missingOnly ? ' (חסרות קבלה)' : '') + (byVia ? ' (לפי דרך)' : '');
   }
   filterMissingEl.addEventListener('change', renderRows);
+
+  // ---- sort toggle (income list) ----
+  function setSort(mode) {
+    sortBy = mode === 'via' ? 'via' : 'date';
+    Array.prototype.forEach.call(sortEl.querySelectorAll('button'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-sort') === sortBy);
+    });
+  }
+  sortEl.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button[data-sort]');
+    if (!b || b.getAttribute('data-sort') === sortBy) return;
+    setSort(b.getAttribute('data-sort'));
+    if (currentRows.length) renderRows();
+  });
 
   // ---- receipt selection (income list) ------------------------------------
   function selectedRows() {
