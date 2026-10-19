@@ -81,7 +81,24 @@
     '.pay-acts{display:flex;gap:10px;margin-top:16px}',
     '.pay-acts button{flex:1;padding:14px;font-size:17px;font-weight:700;border-radius:12px;cursor:pointer;font-family:inherit}',
     '.pay-send{background:#1d4ed8;color:#fff;border:0}',
-    '.pay-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}'
+    '.pay-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}',
+    // --- receipt preview: the form steps aside, the receipt as SUMIT prints it steps in ---
+    '.pay-sheet.previewing > :not(h3):not(.pay-preview):not(.pay-status):not(.pay-acts){display:none}',
+    '.pay-preview{display:none;margin-top:4px}',
+    '.pay-sheet.previewing .pay-preview{display:block}',
+    '.pay-pv-note{font-size:13px;color:var(--muted);margin:0 2px 10px;line-height:1.5}',
+    '.pay-pv{background:#fff;color:#111;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}',
+    '.pay-pv-title{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}',
+    '.pay-pv-title b{font-size:20px}.pay-pv-title span{font-size:12px;color:#666}',
+    '.pay-pv-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:13px;margin-bottom:10px}',
+    '.pay-pv-meta div{min-width:0;overflow-wrap:anywhere}.pay-pv-meta small{display:block;color:#666;font-size:11px}',
+    '.pay-pv-desc{font-size:13px;color:#333;margin:0 0 10px;padding:8px 10px;background:#f6f7f9;border-radius:8px}',
+    '.pay-pv-lines{width:100%;border-collapse:collapse;font-size:13px}',
+    '.pay-pv-lines th{text-align:start;font-weight:600;color:#666;font-size:11px;border-bottom:1px solid #ddd;padding:4px 5px}',
+    '.pay-pv-lines td{padding:7px 5px;border-bottom:1px solid #eee;vertical-align:top}',
+    '.pay-pv-lines td.n{white-space:nowrap;text-align:end;font-variant-numeric:tabular-nums}',
+    '.pay-pv-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;font-size:15px}',
+    '.pay-pv-total b{font-size:20px}'
   ].join('');
   var styleEl = document.createElement('style');
   styleEl.textContent = css;
@@ -332,6 +349,49 @@
 
   function isEmail(s) { return /.+@.+\..+/.test(s || ''); }
 
+  // "2026-10-19" -> "19/10/2026", the date form SUMIT prints on the receipt.
+  function dateHe(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : (iso || '');
+  }
+  // The receipt as SUMIT will print it, drawn from the same pieces the server
+  // sends: lines {name, description, date, quantity, unitPrice, amount}, the
+  // document description, customer, payment. A picture, not a legal document —
+  // the number and the official layout come from SUMIT when it is issued.
+  function previewHtml(o) {
+    var rows = o.lines.map(function (ln) {
+      var text = ln.name + (ln.description ? ' — ' + ln.description : '') + (ln.date ? ' (' + ln.date + ')' : '');
+      return '<tr><td>' + esc(text) + '</td>'
+        + '<td class="n">' + esc(ln.quantity) + '</td>'
+        + '<td class="n">' + money(ln.unitPrice) + '</td>'
+        + '<td class="n">' + money(ln.amount) + '</td></tr>';
+    }).join('');
+    return '<p class="pay-pv-note">כך תיראה הקבלה (בקירוב). בדוק לפני האישור — לאחר השליחה אין ביטול.</p>'
+      + '<div class="pay-pv">'
+      + '<div class="pay-pv-title"><b>קבלה</b><span>מספר יינתן ע"י SUMIT</span></div>'
+      + '<div class="pay-pv-meta">'
+      + '<div><small>לקוח</small>' + esc(o.customer.name) + '</div>'
+      + '<div><small>תאריך</small>' + esc(dateHe(o.payment.date)) + '</div>'
+      + '<div><small>נשלח אל</small><span dir="ltr">' + esc(o.customer.email) + '</span></div>'
+      + '<div><small>אופן תשלום</small>' + esc(o.payment.method) + '</div>'
+      + '</div>'
+      + (o.description ? '<p class="pay-pv-desc">' + esc(o.description) + '</p>' : '')
+      + '<table class="pay-pv-lines"><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + '<div class="pay-pv-total"><span>סה"כ לתשלום</span><b>' + money(o.total) + '</b></div>'
+      + '</div>';
+  }
+  // A demand's income row as the server's rowLine_ turns it into a receipt line:
+  // the row's מוצר (else its name), כמות (else 1), תיאור לקבלה, unit = amount / qty.
+  function demandLine(ln) {
+    var name = String(ln.product || '').trim() || String(ln.name || '').trim();
+    var qty  = parseFloat(ln.quantity);
+    if (!(qty > 0)) qty = 1;
+    var amount = Math.round((Number(ln.amount) || 0) * 100) / 100;
+    return { name: name, description: String(ln.lineDescription || '').trim(), date: ln.date,
+             quantity: qty, unitPrice: Math.round(amount / qty * 100) / 100, amount: amount };
+  }
+
   // A text/date field with a "חסר" mark when its prefill is empty.
   function fieldHtml(id, label, type, value, extra) {
     var missing = !value;
@@ -362,9 +422,10 @@
         return '<option' + (m === def ? ' selected' : '') + '>' + esc(m) + '</option>';
       }).join('') + '</select>',
       '  <p class="pay-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית, תישלח ללקוח במייל, והדרישה תסומן כשולמה.</p>',
+      '  <div class="pay-preview" id="pay-preview"></div>',
       '  <div class="pay-status" id="pay-modal-status"></div>',
       '  <div class="pay-acts">',
-      '    <button type="button" class="pay-send">שלח</button>',
+      '    <button type="button" class="pay-send">תצוגה מקדימה</button>',
       '    <button type="button" class="pay-cancel">בטל</button>',
       '  </div>',
       '</div>'
@@ -372,15 +433,53 @@
     screen.appendChild(modal);
 
     function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
-    modal.querySelector('.pay-cancel').addEventListener('click', close);
-    modal.querySelector('.pay-send').addEventListener('click', function () {
+    var sheet     = modal.querySelector('.pay-sheet');
+    var sendBtn   = modal.querySelector('.pay-send');
+    var cancelBtn = modal.querySelector('.pay-cancel');
+    var pvEl      = modal.querySelector('#pay-preview');
+    var st        = modal.querySelector('#pay-modal-status');
+    function status(msg, cls) { st.className = 'pay-status' + (cls ? ' ' + cls : ''); st.textContent = msg || ''; }
+
+    // Two steps: the first tap validates and shows the receipt as it will print;
+    // only the second tap, on "אשר ושלח", reaches the server. "ערוך" steps back.
+    var previewing = false;
+    function enterPreview(o) {
+      pvEl.innerHTML = previewHtml(o);
+      sheet.classList.add('previewing');
+      sendBtn.textContent = 'אשר ושלח';
+      cancelBtn.textContent = 'ערוך';
+      previewing = true;
+      status('');
+      sheet.scrollTop = 0;
+    }
+    function leavePreview() {
+      sheet.classList.remove('previewing');
+      sendBtn.textContent = 'תצוגה מקדימה';
+      cancelBtn.textContent = 'בטל';
+      previewing = false;
+      status('');
+    }
+    cancelBtn.addEventListener('click', function () { if (previewing) leavePreview(); else close(); });
+    sendBtn.addEventListener('click', function () {
       var name     = modal.querySelector('#pay-cust').value.trim();
       var mail     = modal.querySelector('#pay-email').value.trim();
       var paidDate = modal.querySelector('#pay-paid').value;
       var method   = modal.querySelector('#pay-method').value;
-      var st = modal.querySelector('#pay-modal-status');
       var why = !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : !paidDate ? 'חסר תאריך תשלום' : '';
-      if (why) { st.className = 'pay-status err'; st.textContent = why; return; }
+      if (why) { if (previewing) leavePreview(); status(why, 'err'); return; }
+
+      if (!previewing) {
+        // Same document description the server builds in issueReceiptLocked_ for a demand.
+        var mName = HEB_MONTHS[Number(selectedMonth()) - 1];
+        enterPreview({
+          lines: (r.lines || []).map(demandLine),
+          description: 'דרישת תשלום ' + d.serial + (mName ? ' — ' + mName + ' ' + selectedYear() : ''),
+          total: d.total,
+          customer: { name: name, email: mail },
+          payment: { date: paidDate, method: method }
+        });
+        return;
+      }
       close();
       issueReceipt({
         rowIds:       (r.lines || []).map(function (ln) { return ln.id; }),

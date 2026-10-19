@@ -4,7 +4,7 @@
 //
 // Bump CACHE on every shell change so phones drop the stale version.
 
-var CACHE = 'financico-v19';
+var CACHE = 'financico-v20';
 var ASSETS = [
   './',
   './index.html',

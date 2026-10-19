@@ -69,7 +69,24 @@
     '.rc-send{background:#b45309;color:#fff}.rc-send:disabled{opacity:.5}',
     '.rc-cancel{background:#e9edf1;color:var(--ink)}',
     '.rc-done{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;border-radius:12px;padding:14px;font-size:16px;font-weight:700;text-align:center;margin-top:12px}',
-    '.rc-done a{color:#065f46}'
+    '.rc-done a{color:#065f46}',
+    // the preview: the form steps aside, the receipt as SUMIT will print it steps in
+    '.rc-sheet.previewing > :not(h3):not(.rc-preview):not(.rc-status):not(.rc-acts){display:none}',
+    '.rc-preview{display:none;margin-top:4px}',
+    '.rc-sheet.previewing .rc-preview{display:block}',
+    '.rc-pv-note{font-size:13px;color:var(--muted);margin:0 2px 10px;line-height:1.5}',
+    '.rc-pv{background:#fff;color:#111;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}',
+    '.rc-pv-title{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}',
+    '.rc-pv-title b{font-size:20px}.rc-pv-title span{font-size:12px;color:#666}',
+    '.rc-pv-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:13px;margin-bottom:10px}',
+    '.rc-pv-meta div{min-width:0;overflow-wrap:anywhere}.rc-pv-meta small{display:block;color:#666;font-size:11px}',
+    '.rc-pv-desc{font-size:13px;color:#333;margin:0 0 10px;padding:8px 10px;background:#f6f7f9;border-radius:8px}',
+    '.rc-pv-lines{width:100%;border-collapse:collapse;font-size:13px}',
+    '.rc-pv-lines th{text-align:start;font-weight:600;color:#666;font-size:11px;border-bottom:1px solid #ddd;padding:4px 5px}',
+    '.rc-pv-lines td{padding:7px 5px;border-bottom:1px solid #eee;vertical-align:top}',
+    '.rc-pv-lines td.n{white-space:nowrap;text-align:end;font-variant-numeric:tabular-nums}',
+    '.rc-pv-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;font-size:15px}',
+    '.rc-pv-total b{font-size:20px}'
   ].join('\n');
   var styleEl = document.createElement('style');
   styleEl.textContent = css;
@@ -100,6 +117,38 @@
   // One reference per modal: the server turns the same key into the same receipt.
   function newRef() {
     return 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  // "2026-10-19" -> "19/10/2026", the date form SUMIT prints on the receipt.
+  function dateHe(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : (iso || '');
+  }
+  // The receipt as SUMIT will print it, drawn from the same pieces the server
+  // sends: lines {name, description, date, quantity, unitPrice, amount}, the
+  // document description, customer, payment. A picture, not a legal document —
+  // the number and the official layout come from SUMIT when it is issued.
+  function previewHtml(o) {
+    var rows = o.lines.map(function (ln) {
+      var text = ln.name + (ln.description ? ' — ' + ln.description : '') + (ln.date ? ' (' + ln.date + ')' : '');
+      return '<tr><td>' + esc(text) + '</td>'
+        + '<td class="n">' + esc(ln.quantity) + '</td>'
+        + '<td class="n">' + money(ln.unitPrice) + '</td>'
+        + '<td class="n">' + money(ln.amount) + '</td></tr>';
+    }).join('');
+    return '<p class="rc-pv-note">כך תיראה הקבלה (בקירוב). בדוק לפני האישור — לאחר השליחה אין ביטול.</p>'
+      + '<div class="rc-pv">'
+      + '<div class="rc-pv-title"><b>קבלה</b><span>מספר יינתן ע"י SUMIT</span></div>'
+      + '<div class="rc-pv-meta">'
+      + '<div><small>לקוח</small>' + esc(o.customer.name) + '</div>'
+      + '<div><small>תאריך</small>' + esc(dateHe(o.payment.date)) + '</div>'
+      + '<div><small>נשלח אל</small><span dir="ltr">' + esc(o.customer.email) + '</span></div>'
+      + '<div><small>אופן תשלום</small>' + esc(o.payment.method) + '</div>'
+      + '</div>'
+      + (o.description ? '<p class="rc-pv-desc">' + esc(o.description) + '</p>' : '')
+      + '<table class="rc-pv-lines"><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + '<div class="rc-pv-total"><span>סה"כ לתשלום</span><b>' + money(o.total) + '</b></div>'
+      + '</div>';
   }
   function post(payload) {
     return fetch(endpoint(), {
@@ -213,9 +262,10 @@
         return '<option>' + esc(m) + '</option>';
       }).join('') + '</select>',
       '  <p class="rc-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית ותישלח ללקוח במייל. הקבלה אינה נרשמת בגיליון ואינה משויכת לשורת הכנסה.</p>',
+      '  <div class="rc-preview" id="rc-preview"></div>',
       '  <div class="rc-status" id="rc-modal-status"></div>',
       '  <div class="rc-acts">',
-      '    <button type="button" class="rc-send">שלח</button>',
+      '    <button type="button" class="rc-send">תצוגה מקדימה</button>',
       '    <button type="button" class="rc-cancel">בטל</button>',
       '  </div>',
       '</div>'
@@ -263,7 +313,29 @@
       statusEl.textContent = msg || '';
     }
     function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
-    modal.querySelector('.rc-cancel').addEventListener('click', close);
+    var cancelBtn = modal.querySelector('.rc-cancel');
+    var previewEl = modal.querySelector('#rc-preview');
+
+    // Two steps: the first tap validates and shows the receipt as it will print;
+    // only the second tap, on "אשר ושלח", reaches the server. "ערוך" steps back.
+    var previewing = false;
+    function enterPreview(o) {
+      previewEl.innerHTML = previewHtml(o);
+      sheet.classList.add('previewing');
+      sendBtn.textContent = 'אשר ושלח';
+      cancelBtn.textContent = 'ערוך';
+      previewing = true;
+      status('');
+      sheet.scrollTop = 0;
+    }
+    function leavePreview() {
+      sheet.classList.remove('previewing');
+      sendBtn.textContent = 'תצוגה מקדימה';
+      cancelBtn.textContent = 'בטל';
+      previewing = false;
+      status('');
+    }
+    cancelBtn.addEventListener('click', function () { if (previewing) leavePreview(); else close(); });
 
     // Issued: the form is replaced by the receipt number, so nothing can be re-sent.
     function showIssued(r, already) {
@@ -295,10 +367,25 @@
               : !name         ? 'חסר שם לקוח'
               : !isEmail(mail)? 'חסר מייל ללקוח'
               : !paid         ? 'חסר תאריך תשלום' : '';
-      if (why) { status(why, 'err'); return; }
+      if (why) { if (previewing) leavePreview(); status(why, 'err'); return; }
+
+      var monthVal = monthInput.value;
+      if (!previewing) {
+        // Same shapes the server builds: the line text in buildReceiptPayload_,
+        // the document description in issueGeneralReceiptLocked_.
+        var tag = monthLabel(monthVal);
+        enterPreview({
+          lines: [{ name: product, description: desc, date: '', quantity: qty,
+                    unitPrice: Math.round(unit * 100) / 100, amount: amount }],
+          description: product + (tag ? ' — ' + tag : ''),
+          total: amount,
+          customer: { name: name, email: mail },
+          payment: { date: paid, method: method }
+        });
+        return;
+      }
 
       sendBtn.disabled = true;           // no second submit while in flight
-      var monthVal = monthInput.value;
       status('מפיק קבלה של ' + money(amount) + (monthVal ? ' עבור ' + monthLabel(monthVal) : '') + '…', '');
       post({ token: token(), action: 'issueGeneralReceipt',
              product: product, quantity: qty, unitPrice: unit, description: desc,

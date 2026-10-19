@@ -127,6 +127,23 @@
     '.ln-unit{padding:13px 0;font-size:16px;font-weight:700;text-align:center;border-bottom:1.5px solid var(--line);min-height:20px}',
     '.ln-unit.err{color:var(--err);font-size:13px;font-weight:600}',
     '.db-line.bad{border-color:#dc2626}',
+    // --- receipt preview: the form steps aside, the receipt as SUMIT prints it steps in ---
+    '.db-sheet.previewing > :not(h3):not(.db-preview):not(.db-modal-status):not(.db-acts){display:none}',
+    '.db-preview{display:none;margin-top:4px}',
+    '.db-sheet.previewing .db-preview{display:block}',
+    '.db-pv-note{font-size:13px;color:var(--muted);margin:0 2px 10px;line-height:1.5}',
+    '.db-pv{background:#fff;color:#111;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}',
+    '.db-pv-title{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}',
+    '.db-pv-title b{font-size:20px}.db-pv-title span{font-size:12px;color:#666}',
+    '.db-pv-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:13px;margin-bottom:10px}',
+    '.db-pv-meta div{min-width:0;overflow-wrap:anywhere}.db-pv-meta small{display:block;color:#666;font-size:11px}',
+    '.db-pv-desc{font-size:13px;color:#333;margin:0 0 10px;padding:8px 10px;background:#f6f7f9;border-radius:8px}',
+    '.db-pv-lines{width:100%;border-collapse:collapse;font-size:13px}',
+    '.db-pv-lines th{text-align:start;font-weight:600;color:#666;font-size:11px;border-bottom:1px solid #ddd;padding:4px 5px}',
+    '.db-pv-lines td{padding:7px 5px;border-bottom:1px solid #eee;vertical-align:top}',
+    '.db-pv-lines td.n{white-space:nowrap;text-align:end;font-variant-numeric:tabular-nums}',
+    '.db-pv-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;font-size:15px}',
+    '.db-pv-total b{font-size:20px}',
     // --- delete (expense list): header icon + per-row checkboxes ---
     '.db-trash{position:relative;background:rgba(255,255,255,.18);border:0;color:#fff;width:38px;height:38px;border-radius:10px;font-size:18px;line-height:1;cursor:pointer;font-family:inherit;padding:0}',
     '.db-trash:disabled{opacity:.4;cursor:default}',
@@ -852,6 +869,38 @@
     var t = new Date();
     return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
   }
+  // "2026-10-19" -> "19/10/2026", the date form SUMIT prints on the receipt.
+  function dateHe(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : (iso || '');
+  }
+  // The receipt as SUMIT will print it, drawn from the same pieces the server
+  // sends: lines {name, description, date, quantity, unitPrice, amount}, the
+  // document description, customer, payment. A picture, not a legal document —
+  // the number and the official layout come from SUMIT when it is issued.
+  function previewHtml(o) {
+    var rows = o.lines.map(function (ln) {
+      var text = ln.name + (ln.description ? ' — ' + ln.description : '') + (ln.date ? ' (' + ln.date + ')' : '');
+      return '<tr><td>' + esc(text) + '</td>'
+        + '<td class="n">' + esc(ln.quantity) + '</td>'
+        + '<td class="n">' + money(ln.unitPrice) + '</td>'
+        + '<td class="n">' + money(ln.amount) + '</td></tr>';
+    }).join('');
+    return '<p class="db-pv-note">כך תיראה הקבלה (בקירוב). בדוק לפני האישור — לאחר השליחה אין ביטול.</p>'
+      + '<div class="db-pv">'
+      + '<div class="db-pv-title"><b>קבלה</b><span>מספר יינתן ע"י SUMIT</span></div>'
+      + '<div class="db-pv-meta">'
+      + '<div><small>לקוח</small>' + esc(o.customer.name) + '</div>'
+      + '<div><small>תאריך</small>' + esc(dateHe(o.payment.date)) + '</div>'
+      + '<div><small>נשלח אל</small><span dir="ltr">' + esc(o.customer.email) + '</span></div>'
+      + '<div><small>אופן תשלום</small>' + esc(o.payment.method) + '</div>'
+      + '</div>'
+      + (o.description ? '<p class="db-pv-desc">' + esc(o.description) + '</p>' : '')
+      + '<table class="db-pv-lines"><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + '<div class="db-pv-total"><span>סה"כ לתשלום</span><b>' + money(o.total) + '</b></div>'
+      + '</div>';
+  }
   // Modal default: +30 rows were paid by bank transfer; a direct-paid row keeps its
   // own method when it is one SUMIT knows (ביט -> Bit); anything else -> bank transfer.
   function defaultMethod(rows) {
@@ -927,9 +976,10 @@
         return '<option' + (m === def ? ' selected' : '') + '>' + esc(m) + '</option>';
       }).join('') + '</select>',
       '  <p class="db-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית ותישלח ללקוח במייל. הלקוח, המייל, המוצר, הכמות והתיאור יישמרו על השורות.</p>',
+      '  <div class="db-preview" id="db-preview"></div>',
       '  <div class="db-modal-status" id="db-modal-status"></div>',
       '  <div class="db-acts">',
-      '    <button type="button" class="db-send">שלח</button>',
+      '    <button type="button" class="db-send">תצוגה מקדימה</button>',
       '    <button type="button" class="db-cancel">בטל</button>',
       '  </div>',
       '</div>'
@@ -940,7 +990,30 @@
     var statusEl = modal.querySelector('#db-modal-status');
     function status(msg, cls) { statusEl.className = 'db-modal-status' + (cls ? ' ' + cls : ''); statusEl.textContent = msg || ''; }
     function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
-    modal.querySelector('.db-cancel').addEventListener('click', close);
+    var sheet     = modal.querySelector('.db-sheet');
+    var cancelBtn = modal.querySelector('.db-cancel');
+    var previewEl = modal.querySelector('#db-preview');
+
+    // Two steps: the first tap validates and shows the receipt as it will print;
+    // only the second tap, on "אשר ושלח", reaches the server. "ערוך" steps back.
+    var previewing = false;
+    function enterPreview(o) {
+      previewEl.innerHTML = previewHtml(o);
+      sheet.classList.add('previewing');
+      sendBtn.textContent = 'אשר ושלח';
+      cancelBtn.textContent = 'ערוך';
+      previewing = true;
+      status('');
+      sheet.scrollTop = 0;
+    }
+    function leavePreview() {
+      sheet.classList.remove('previewing');
+      sendBtn.textContent = 'תצוגה מקדימה';
+      cancelBtn.textContent = 'בטל';
+      previewing = false;
+      status('');
+    }
+    cancelBtn.addEventListener('click', function () { if (previewing) leavePreview(); else close(); });
 
     // Each line's unit price follows its quantity; a quantity the amount does not
     // split into marks the card and holds the send button.
@@ -986,7 +1059,26 @@
       var why = blank ? 'חסר מוצר' + (lines.length > 1 ? ' באחת השורות' : '')
               : !refreshLines() ? 'יש שורה שסכומה לא מתחלק בכמות'
               : !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : !paidDate ? 'חסר תאריך תשלום' : '';
-      if (why) { status(why, 'err'); return; }
+      if (why) { if (previewing) leavePreview(); status(why, 'err'); return; }
+
+      if (!previewing) {
+        // Same line text the server builds in rowLine_ / buildReceiptPayload_:
+        // product — description (dd/MM); a door-B receipt carries no document description.
+        enterPreview({
+          lines: lines.map(function (ln, i) {
+            var r = rows[i];
+            return { name: ln.product, description: ln.description,
+                     date: String(r.date || '').slice(0, 5),
+                     quantity: ln.quantity, unitPrice: unitPriceFor(r.amount, ln.quantity),
+                     amount: Number(r.amount) || 0 };
+          }),
+          description: '',
+          total: total,
+          customer: { name: name, email: mail },
+          payment: { date: paidDate, method: method }
+        });
+        return;
+      }
 
       sendBtn.disabled = true;                 // no second submit while in flight
       status('מפיק קבלה…', '');
