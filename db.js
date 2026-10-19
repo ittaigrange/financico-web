@@ -141,6 +141,7 @@
     '.db-pv-lines{width:100%;border-collapse:collapse;font-size:13px}',
     '.db-pv-lines th{text-align:start;font-weight:600;color:#666;font-size:11px;border-bottom:1px solid #ddd;padding:4px 5px}',
     '.db-pv-lines td{padding:7px 5px;border-bottom:1px solid #eee;vertical-align:top}',
+    '.db-pv-lines td small{display:block;color:#666;font-size:11px;margin-top:2px}',
     '.db-pv-lines td.n{white-space:nowrap;text-align:end;font-variant-numeric:tabular-nums}',
     '.db-pv-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;font-size:15px}',
     '.db-pv-total b{font-size:20px}',
@@ -880,15 +881,17 @@
   // the number and the official layout come from SUMIT when it is issued.
   function previewHtml(o) {
     var rows = o.lines.map(function (ln) {
-      var text = ln.name + (ln.description ? ' — ' + ln.description : '') + (ln.date ? ' (' + ln.date + ')' : '');
-      return '<tr><td>' + esc(text) + '</td>'
+      // As SUMIT prints a חשבון/קבלה line: the product, then (smaller) the free
+      // description and the row's date — the same Description buildReceiptPayload_ sends.
+      var sub = ((ln.description || '') + (ln.date ? ' (' + ln.date + ')' : '')).trim();
+      return '<tr><td>' + esc(ln.name) + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</td>'
         + '<td class="n">' + esc(ln.quantity) + '</td>'
         + '<td class="n">' + money(ln.unitPrice) + '</td>'
         + '<td class="n">' + money(ln.amount) + '</td></tr>';
     }).join('');
     return '<p class="db-pv-note">כך תיראה הקבלה (בקירוב). בדוק לפני האישור — לאחר השליחה אין ביטול.</p>'
       + '<div class="db-pv">'
-      + '<div class="db-pv-title"><b>קבלה</b><span>מספר יינתן ע"י SUMIT</span></div>'
+      + '<div class="db-pv-title"><b>חשבון/קבלה</b><span>מספר יינתן ע"י SUMIT</span></div>'
       + '<div class="db-pv-meta">'
       + '<div><small>לקוח</small>' + esc(o.customer.name) + '</div>'
       + '<div><small>תאריך</small>' + esc(dateHe(o.payment.date)) + '</div>'
