@@ -13,11 +13,17 @@
 
    Receipts (door B of issueReceipt): on the income list, rows that carry a מזהה
    and are not yet on a receipt get a checkbox. Selecting one or more shows an
-   action bar with "הפק קבלה"; the modal pre-fills customer name / email from the
-   rows' לקוח / מייל לקוח columns (missing fields marked for entry), payment date
-   (today) and method, and sends issueReceipt({rowIds, customer, payment}). The
-   server writes the receipt onto the rows and the customer back where empty. A
-   selection mixing +30 rows with direct-paid rows is refused with a message. */
+   action bar with "הפק קבלה"; the modal shows each row as a receipt line — product
+   (pre-filled from the row's מוצר, else שם הכנסה), quantity (the row's כמות, else
+   1), the unit price DERIVED from the row amount (סכום ÷ כמות, shown, never
+   typed; a quantity the amount does not split into to the agora is refused
+   here and again on the server) and an optional free description — then
+   pre-fills customer name / email from the rows' לקוח / מייל לקוח columns
+   (missing fields marked for entry), payment date (today) and method, and sends
+   issueReceipt({rowIds, lines, customer, payment}). The server writes the
+   receipt onto the rows, the customer back where empty and the lines back as
+   issued. A selection mixing +30 rows with direct-paid rows is refused with a
+   message. */
 (function () {
   "use strict";
   if (window.FinDB) return;              // guard: load + init exactly once
@@ -110,6 +116,17 @@
     '.db-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}',
     '.db-modal-status{min-height:22px;margin-top:10px;text-align:center;font-size:15px;font-weight:600}',
     '.db-modal-status.err{color:var(--err)}.db-modal-status.ok{color:var(--green)}',
+    // --- receipt lines (one card per selected row) ---
+    '.db-lines{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}',
+    '.db-line{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 12px 12px}',
+    '.db-line-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:8px 0 2px;font-size:13px;color:var(--muted)}',
+    '.db-line-head b{color:var(--ink);font-size:15px;white-space:nowrap}',
+    '.db-line label{margin-top:8px}',
+    '.db-line-grid{display:grid;grid-template-columns:1fr 1.4fr;gap:10px;align-items:end}',
+    '.db-line-grid input{text-align:center;font-weight:700}',
+    '.ln-unit{padding:13px 0;font-size:16px;font-weight:700;text-align:center;border-bottom:1.5px solid var(--line);min-height:20px}',
+    '.ln-unit.err{color:var(--err);font-size:13px;font-weight:600}',
+    '.db-line.bad{border-color:#dc2626}',
     // --- delete (expense list): header icon + per-row checkboxes ---
     '.db-trash{position:relative;background:rgba(255,255,255,.18);border:0;color:#fff;width:38px;height:38px;border-radius:10px;font-size:18px;line-height:1;cursor:pointer;font-family:inherit;padding:0}',
     '.db-trash:disabled{opacity:.4;cursor:default}',
@@ -860,18 +877,46 @@
       + '<input type="' + type + '" id="' + id + '" class="' + (missing ? 'need' : '') + '" value="' + esc(value) + '"' + (extra || '') + '>';
   }
 
+  // One receipt line per selected row: product, quantity, the derived unit price,
+  // an optional description. Prefill: the row's own מוצר · כמות · תיאור לקבלה
+  // (listRows returns them, '' when the sheet has no such columns), else שם הכנסה / 1.
+  function lineHtml(r, i) {
+    var qty = String(r.quantity == null ? '' : r.quantity).trim() || '1';
+    return '<div class="db-line" data-idx="' + i + '">'
+      + '<div class="db-line-head"><span>' + esc(r.name) + ' (' + esc(r.date) + ')</span><b>' + money(r.amount) + '</b></div>'
+      + '<label for="ln-product-' + i + '">מוצר</label>'
+      + '<input type="text" id="ln-product-' + i + '" class="ln-product" value="' + esc(String(r.product || '').trim() || r.name) + '">'
+      + '<div class="db-line-grid">'
+      +   '<div><label for="ln-qty-' + i + '">כמות</label>'
+      +   '<input type="number" id="ln-qty-' + i + '" class="ln-qty" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '"></div>'
+      +   '<div><label>מחיר ליחידה</label><div class="ln-unit"></div></div>'
+      + '</div>'
+      + '<label for="ln-desc-' + i + '">תיאור חופשי (רשות)</label>'
+      + '<input type="text" id="ln-desc-' + i + '" class="ln-desc" value="' + esc(r.lineDescription || '') + '">'
+      + '</div>';
+  }
+  // The unit price a row amount gives at a quantity, to the agora — or '' when the
+  // amount does not split into that quantity (166.67 × 3 = 500.01 ≠ 500). Same rule
+  // as the server's rowLine_.
+  function unitPriceFor(amount, qty) {
+    var a = Math.round((Number(amount) || 0) * 100) / 100;
+    var q = parseFloat(qty);
+    if (!(q > 0) || !isFinite(q)) return '';
+    var unit = Math.round(a / q * 100) / 100;
+    return Math.abs(Math.round(unit * q * 100) / 100 - a) < 0.005 ? unit : '';
+  }
+
   function openReceiptModal(rows) {
     var total = 0;
     rows.forEach(function (r) { total += Number(r.amount) || 0; });
     var def = defaultMethod(rows);
-    var names = rows.map(function (r) { return esc(r.name) + ' (' + esc(r.date) + ')'; }).join('<br>');
     var modal = document.createElement('div');
     modal.className = 'db-modal';
     modal.innerHTML = [
       '<div class="db-sheet">',
       '  <h3>הפקת קבלה — ' + rows.length + ' שורות</h3>',
+      '  <div class="db-lines">' + rows.map(lineHtml).join('') + '</div>',
       '  <dl>',
-      '    <dt>שורות</dt><dd>' + names + '</dd>',
       '    <dt>סכום</dt><dd>' + money(total) + '</dd>',
       '  </dl>',
       fieldHtml('db-cust', 'לקוח', 'text', firstOf(rows, 'customer')),
@@ -881,7 +926,7 @@
       '  <select id="db-method">' + PAY_METHODS.map(function (m) {
         return '<option' + (m === def ? ' selected' : '') + '>' + esc(m) + '</option>';
       }).join('') + '</select>',
-      '  <p class="db-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית ותישלח ללקוח במייל. הלקוח והמייל יישמרו על השורות.</p>',
+      '  <p class="db-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית ותישלח ללקוח במייל. הלקוח, המייל, המוצר, הכמות והתיאור יישמרו על השורות.</p>',
       '  <div class="db-modal-status" id="db-modal-status"></div>',
       '  <div class="db-acts">',
       '    <button type="button" class="db-send">שלח</button>',
@@ -897,18 +942,56 @@
     function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
     modal.querySelector('.db-cancel').addEventListener('click', close);
 
+    // Each line's unit price follows its quantity; a quantity the amount does not
+    // split into marks the card and holds the send button.
+    var lineEls = Array.prototype.slice.call(modal.querySelectorAll('.db-line'));
+    function refreshLine(el) {
+      var r = rows[Number(el.getAttribute('data-idx'))];
+      var qtyEl = el.querySelector('.ln-qty'), unitEl = el.querySelector('.ln-unit');
+      var unit = unitPriceFor(r.amount, qtyEl.value);
+      var ok = unit !== '';
+      unitEl.textContent = ok ? money(unit) : (parseFloat(qtyEl.value) > 0 ? 'הסכום לא מתחלק בכמות' : 'חסרה כמות');
+      unitEl.classList.toggle('err', !ok);
+      el.classList.toggle('bad', !ok);
+      return ok;
+    }
+    function refreshLines() {
+      var allOk = true;
+      lineEls.forEach(function (el) { if (!refreshLine(el)) allOk = false; });
+      return allOk;
+    }
+    lineEls.forEach(function (el) {
+      el.querySelector('.ln-qty').addEventListener('input', refreshLines);
+    });
+    refreshLines();
+    // What goes to the server for each row: product, quantity, description (the unit
+    // price is derived there again). '' when a product is blank.
+    function collectLines() {
+      return lineEls.map(function (el) {
+        var r = rows[Number(el.getAttribute('data-idx'))];
+        return { id: String(r.id),
+                 product:     el.querySelector('.ln-product').value.trim(),
+                 quantity:    parseFloat(el.querySelector('.ln-qty').value),
+                 description: el.querySelector('.ln-desc').value.trim() };
+      });
+    }
+
     sendBtn.addEventListener('click', function () {
       var name     = modal.querySelector('#db-cust').value.trim();
       var mail     = modal.querySelector('#db-email').value.trim();
       var paidDate = modal.querySelector('#db-paid').value;
       var method   = modal.querySelector('#db-method').value;
-      var why = !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : !paidDate ? 'חסר תאריך תשלום' : '';
+      var lines    = collectLines();
+      var blank    = lines.filter(function (ln) { return !ln.product; }).length;
+      var why = blank ? 'חסר מוצר' + (lines.length > 1 ? ' באחת השורות' : '')
+              : !refreshLines() ? 'יש שורה שסכומה לא מתחלק בכמות'
+              : !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : !paidDate ? 'חסר תאריך תשלום' : '';
       if (why) { status(why, 'err'); return; }
 
       sendBtn.disabled = true;                 // no second submit while in flight
       status('מפיק קבלה…', '');
       var rowIds = rows.map(function (r) { return String(r.id); }).sort();
-      postAction({ token: token(), action: 'issueReceipt', rowIds: rowIds,
+      postAction({ token: token(), action: 'issueReceipt', rowIds: rowIds, lines: lines,
                    customer: { name: name, email: mail }, payment: { date: paidDate, method: method } })
         .then(function (r) {
           if (r && r.ok && r.dryRun) {

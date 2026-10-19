@@ -8,8 +8,10 @@
      הפק מדרישת תשלום  -> loads payment.js and opens the demand screen, where a
                           demand's own "הפק קבלה" sits (door A of issueReceipt).
      הפק כללי           -> this file's own modal (door C, issueGeneralReceipt):
-                          a free amount for a free פירוט, to any name and mail,
-                          unattached to any row. Nothing is written to the sheet —
+                          a product × quantity at a unit price (+ an optional free
+                          description), to any name and mail, unattached to any
+                          row. The total is quantity × unit price, computed here
+                          and again on the server. Nothing is written to the sheet —
                           the income behind it is already logged there by hand.
 
    Door C is irreversible and idempotent: the modal mints one reference when it
@@ -52,6 +54,12 @@
     '.rc-sheet input,.rc-sheet select{width:100%;padding:13px;font-size:16px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);outline:none;font-family:inherit}',
     '.rc-sheet input.need{border-color:#fca5a5}',
     '.rc-sheet input.rc-amount{font-size:26px;font-weight:700;text-align:center}',
+    // quantity × unit price side by side, the computed total under them
+    '.rc-line{display:grid;grid-template-columns:1fr 1.6fr;gap:10px}',
+    '.rc-line label{margin-top:12px}',
+    '.rc-line input{text-align:center;font-weight:700}',
+    '.rc-total{display:flex;justify-content:space-between;align-items:baseline;margin:12px 2px 0;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;font-size:14px;color:#9a3412}',
+    '.rc-total b{font-size:22px;color:var(--ink)}',
     '.rc-month{display:flex;flex-direction:column;gap:8px;margin-top:12px}',
     '.rc-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:14px 0 0}',
     '.rc-status{min-height:22px;margin-top:10px;text-align:center;font-size:14px;font-weight:600}',
@@ -120,7 +128,7 @@
     '      <b>הפק מדרישת תשלום</b><span>קק"ל · הילה · לירן — לפי דרישה שהופקה</span>',
     '    </button>',
     '    <button type="button" class="rc-tile gen" id="rc-general">',
-    '      <b>הפק כללי</b><span>סכום ופירוט חופשיים, לכל שם ומייל — ללא קשר לגיליון</span>',
+    '      <b>הפק כללי</b><span>מוצר, כמות ומחיר, לכל שם ומייל — ללא קשר לגיליון</span>',
     '    </button>',
     '  </div>',
     '</div>'
@@ -180,9 +188,19 @@
     modal.innerHTML = [
       '<div class="rc-sheet">',
       '  <h3>הפקת קבלה כללית</h3>',
-      '  <label for="rc-amount">סכום (₪)</label>',
-      '  <input type="number" id="rc-amount" class="rc-amount" inputmode="decimal" min="0" step="any" value="">',
-      fieldHtml('rc-for', 'עבור (הפירוט שיופיע בקבלה)', 'text', ''),
+      fieldHtml('rc-product', 'מוצר', 'text', ''),
+      '  <div class="rc-line">',
+      '    <div>',
+      '      <label for="rc-qty">כמות</label>',
+      '      <input type="number" id="rc-qty" inputmode="decimal" min="0" step="any" value="1">',
+      '    </div>',
+      '    <div>',
+      '      <label for="rc-unit">מחיר ליחידה (₪)</label>',
+      '      <input type="number" id="rc-unit" class="rc-amount" inputmode="decimal" min="0" step="any" value="">',
+      '    </div>',
+      '  </div>',
+      '  <div class="rc-total"><span>סה"כ לקבלה</span><b id="rc-total">—</b></div>',
+      fieldHtml('rc-desc', 'תיאור חופשי (רשות)', 'text', ''),
       '  <div class="rc-month">',
       '    <button type="button" class="date-btn" id="rc-month-btn">📆 ללא חודש</button>',
       '    <input type="month" id="rc-month" class="hidden">',
@@ -220,6 +238,23 @@
     });
     monthInput.addEventListener('change', refreshMonthBtn);
 
+    // The total is quantity × unit price, to the agora — the same arithmetic the
+    // server does; it is shown, never typed.
+    var qtyInput  = modal.querySelector('#rc-qty');
+    var unitInput = modal.querySelector('#rc-unit');
+    var totalEl   = modal.querySelector('#rc-total');
+    function lineTotal() {
+      var q = parseFloat(qtyInput.value), u = parseFloat(unitInput.value);
+      if (!(q > 0) || !(u > 0)) return 0;
+      return Math.round(q * u * 100) / 100;
+    }
+    function refreshTotal() {
+      var t = lineTotal();
+      totalEl.textContent = t > 0 ? money(t) : '—';
+    }
+    qtyInput.addEventListener('input', refreshTotal);
+    unitInput.addEventListener('input', refreshTotal);
+
     var sheet    = modal.querySelector('.rc-sheet');
     var sendBtn  = modal.querySelector('.rc-send');
     var statusEl = modal.querySelector('#rc-modal-status');
@@ -243,15 +278,20 @@
     }
 
     sendBtn.addEventListener('click', function () {
-      var amount = parseFloat(modal.querySelector('#rc-amount').value);
-      var forWhat = modal.querySelector('#rc-for').value.trim();
+      var product = modal.querySelector('#rc-product').value.trim();
+      var qty     = parseFloat(qtyInput.value);
+      var unit    = parseFloat(unitInput.value);
+      var desc    = modal.querySelector('#rc-desc').value.trim();
+      var amount  = lineTotal();
       var name    = modal.querySelector('#rc-cust').value.trim();
       var mail    = modal.querySelector('#rc-email').value.trim();
       var paid    = modal.querySelector('#rc-paid').value;
       var method  = modal.querySelector('#rc-method').value;
 
-      var why = !(amount > 0) ? 'חסר סכום'
-              : !forWhat      ? 'חסר פירוט ("עבור")'
+      var why = !product      ? 'חסר מוצר'
+              : !(qty > 0)    ? 'חסרה כמות'
+              : !(unit > 0)   ? 'חסר מחיר ליחידה'
+              : !(amount > 0) ? 'חסר סכום'
               : !name         ? 'חסר שם לקוח'
               : !isEmail(mail)? 'חסר מייל ללקוח'
               : !paid         ? 'חסר תאריך תשלום' : '';
@@ -261,7 +301,8 @@
       var monthVal = monthInput.value;
       status('מפיק קבלה של ' + money(amount) + (monthVal ? ' עבור ' + monthLabel(monthVal) : '') + '…', '');
       post({ token: token(), action: 'issueGeneralReceipt',
-             amount: amount, description: forWhat, month: monthVal,
+             product: product, quantity: qty, unitPrice: unit, description: desc,
+             month: monthVal,
              customer: { name: name, email: mail },
              payment: { date: paid, method: method },
              ref: ref })
@@ -282,7 +323,7 @@
         });
     });
 
-    modal.querySelector('#rc-amount').focus();
+    modal.querySelector('#rc-product').focus();
   }
 
   // ---- public entry (called by app.js) ----
