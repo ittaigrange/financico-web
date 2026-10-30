@@ -83,9 +83,11 @@
     '.pay-send{background:#1d4ed8;color:#fff;border:0}',
     '.pay-cancel{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}',
     // --- receipt preview: the form steps aside, the receipt as SUMIT prints it steps in ---
-    '.pay-sheet.previewing > :not(h3):not(.pay-preview):not(.pay-status):not(.pay-acts){display:none}',
-    '.pay-preview{display:none;margin-top:4px}',
-    '.pay-sheet.previewing .pay-preview{display:block}',
+    // .pay-rpv, not .pay-preview: .pay-preview is the main screen's container (#pay-preview)
+    // and a display:none on it blanks the whole דרישת תשלום screen (the v20 regression).
+    '.pay-sheet.previewing > :not(h3):not(.pay-rpv):not(.pay-status):not(.pay-acts){display:none}',
+    '.pay-rpv{display:none;margin-top:4px}',
+    '.pay-sheet.previewing .pay-rpv{display:block}',
     '.pay-pv-note{font-size:13px;color:var(--muted);margin:0 2px 10px;line-height:1.5}',
     '.pay-pv{background:#fff;color:#111;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}',
     '.pay-pv-title{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}',
@@ -425,7 +427,7 @@
         return '<option' + (m === def ? ' selected' : '') + '>' + esc(m) + '</option>';
       }).join('') + '</select>',
       '  <p class="pay-warn">הפעולה בלתי הפיכה: תופק קבלה חוקית, תישלח ללקוח במייל, והדרישה תסומן כשולמה.</p>',
-      '  <div class="pay-preview" id="pay-preview"></div>',
+      '  <div class="pay-rpv" id="pay-rpv"></div>',
       '  <div class="pay-status" id="pay-modal-status"></div>',
       '  <div class="pay-acts">',
       '    <button type="button" class="pay-send">תצוגה מקדימה</button>',
@@ -439,7 +441,7 @@
     var sheet     = modal.querySelector('.pay-sheet');
     var sendBtn   = modal.querySelector('.pay-send');
     var cancelBtn = modal.querySelector('.pay-cancel');
-    var pvEl      = modal.querySelector('#pay-preview');
+    var pvEl      = modal.querySelector('#pay-rpv');
     var st        = modal.querySelector('#pay-modal-status');
     function status(msg, cls) { st.className = 'pay-status' + (cls ? ' ' + cls : ''); st.textContent = msg || ''; }
 
