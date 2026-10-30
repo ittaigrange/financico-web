@@ -47,6 +47,9 @@
     '.pay-org.on{border-color:#0f766e;background:#ecfdf5;color:#0f766e}',
     '.pay-period{display:flex;gap:8px;margin-top:18px}',
     '.pay-period select{flex:1}',
+    // "add income" shortcut: same window, into income/ with the org + month prefilled
+    '.pay-add{display:flex;align-items:center;justify-content:center;margin-top:12px;padding:12px;font-size:16px;font-weight:700;color:#0f766e;background:#ecfdf5;border:1.5px dashed #0f766e;border-radius:12px;text-decoration:none}',
+    '.pay-add.hidden{display:none}',
     '.pay-preview{margin-top:20px}',
     '.pay-recipient{font-size:13px;color:var(--muted);margin:0 2px 10px}',
     '.pay-recipient b{color:var(--ink);font-weight:700}',
@@ -146,6 +149,7 @@
     '    <select id="pay-month">' + monthOptions(defMonth) + '</select>',
     '    <select id="pay-year">' + yearOptions(defYear) + '</select>',
     '  </div>',
+    '  <a class="pay-add hidden" id="pay-add"></a>',
     '  <div class="pay-preview" id="pay-preview"></div>',
     '</div>'
   ].join('\n');
@@ -155,6 +159,7 @@
   var orgsEl    = screen.querySelector('#pay-orgs');
   var monthEl   = screen.querySelector('#pay-month');
   var yearEl    = screen.querySelector('#pay-year');
+  var addEl     = screen.querySelector('#pay-add');
   var previewEl = screen.querySelector('#pay-preview');
 
   var currentKey = null;     // selected channel key
@@ -186,6 +191,28 @@
 
   function selectedMonth() { return parseInt(monthEl.value, 10); }
   function selectedYear()  { return parseInt(yearEl.value, 10); }
+  function channelLabel(key) {
+    for (var i = 0; i < CHANNELS.length; i++) if (CHANNELS[i].key === key) return CHANNELS[i].label;
+    return '';
+  }
+
+  // ---- "add income" shortcut ----
+  // A row missing from the demand is added without re-picking client and month:
+  // income/ opens in the same window (no target=_blank, the app stays full-screen)
+  // with דרך, the channel and the month in the query; from=pay gives it a way back
+  // here. Base path computed as app.js does: payment.js may be loaded from income/.
+  function refreshAddLink() {
+    if (!currentKey) { addEl.classList.add('hidden'); addEl.removeAttribute('href'); return; }
+    var base = window.FIN_TYPE ? '../' : './';
+    var label = channelLabel(currentKey);
+    addEl.textContent = '＋ הוסף הכנסה — ' + label;
+    addEl.setAttribute('href', base + 'income/?payer=' + encodeURIComponent(label)
+      + '&ch=' + encodeURIComponent(currentKey)
+      + '&m=' + encodeURIComponent(selectedMonth())
+      + '&y=' + encodeURIComponent(selectedYear())
+      + '&from=pay');
+    addEl.classList.remove('hidden');
+  }
 
   // ---- preview ----
   function runPreview() {
@@ -524,17 +551,35 @@
   }
 
   // ---- wiring ----
+  function selectOrg(key) {
+    if (!channelLabel(key)) return false;
+    currentKey = key;
+    Array.prototype.forEach.call(orgsEl.querySelectorAll('.pay-org'), function (x) {
+      x.classList.toggle('on', x.getAttribute('data-key') === key);
+    });
+    refreshAddLink();
+    runPreview();
+    return true;
+  }
   orgsEl.addEventListener('click', function (ev) {
     var b = ev.target.closest('.pay-org');
-    if (!b) return;
-    currentKey = b.getAttribute('data-key');
-    Array.prototype.forEach.call(orgsEl.querySelectorAll('.pay-org'), function (x) {
-      x.classList.toggle('on', x === b);
-    });
-    runPreview();
+    if (b) selectOrg(b.getAttribute('data-key'));
   });
-  monthEl.addEventListener('change', runPreview);
-  yearEl.addEventListener('change', runPreview);
+  function onPeriodChange() { refreshAddLink(); runPreview(); }
+  monthEl.addEventListener('change', onPeriodChange);
+  yearEl.addEventListener('change', onPeriodChange);
+
+  // Set the month/year pickers to a given period (a year outside the list is added).
+  function setPeriod(month, year) {
+    month = parseInt(month, 10); year = parseInt(year, 10);
+    if (!(month >= 1 && month <= 12) || !(year > 2000 && year < 2100)) return;
+    if (!yearEl.querySelector('option[value="' + year + '"]')) {
+      var o = document.createElement('option'); o.value = year; o.textContent = year;
+      yearEl.appendChild(o);
+    }
+    monthEl.value = String(month);
+    yearEl.value  = String(year);
+  }
 
   function exitToMain() {
     screen.classList.add('hidden');
@@ -544,11 +589,18 @@
   backEl.addEventListener('click', exitToMain);
 
   // ---- public entry (called by app.js) ----
+  // open() alone: the screen as last left. open({channel, month, year}): that org
+  // and month selected and previewed — the way back from the income page's
+  // "add income" shortcut, so the row just saved is already listed.
   window.FinPay = {
-    open: function () {
+    open: function (opts) {
       var wrap = document.querySelector('.wrap');
       if (wrap) wrap.classList.add('hidden');
       screen.classList.remove('hidden');
+      if (opts && opts.channel) {
+        setPeriod(opts.month, opts.year);
+        selectOrg(String(opts.channel));
+      }
     }
   };
 })();

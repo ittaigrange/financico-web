@@ -14,6 +14,7 @@
     '    <div class="hdr-actions">',
     '      <a class="navbtn" id="nav-home" hidden>בית</a>',
     '      <a class="navbtn" id="nav-switch" hidden></a>',
+    '      <a class="navbtn" id="nav-pay" hidden>חזרה לדרישה</a>',
     '      <button class="gear" id="gear" title="הגדרות" aria-label="הגדרות">⚙</button>',
     '    </div>',
     '  </header>',
@@ -250,7 +251,10 @@
     var save   = form.querySelector('.save');
     var status = document.getElementById(opts.statusId);
 
-    function valid(){ return parseFloat(amount.value) > 0 && name.value.trim() !== ''; }
+    function valid(){
+      return parseFloat(amount.value) > 0 && name.value.trim() !== ''
+        && (!opts.extraValid || opts.extraValid());
+    }
     function refresh(){ save.disabled = !valid(); }
     form.addEventListener('input', refresh);
 
@@ -326,26 +330,57 @@
   }
   var dateInput = document.getElementById('i-date');
   var dateBtn   = document.getElementById('i-date-btn');
+  // Month limit (the "add income" shortcut from a past month's דרישת תשלום): the
+  // picker is bounded to that month and the day is never guessed — שמירה stays
+  // disabled until a day inside the month is picked. null = no limit (today by default).
+  var monthLimit = null;   // { min:'yyyy-mm-01', max:'yyyy-mm-dd', label:'mm/yyyy' }
+  function dateInLimit(){
+    return !monthLimit || (dateInput.value >= monthLimit.min && dateInput.value <= monthLimit.max);
+  }
   function refreshDateBtn(){
+    if (monthLimit){
+      var ok = dateInput.value && dateInLimit();
+      dateBtn.textContent = '📅 ' + (ok ? heDate(dateInput.value) : 'בחר תאריך ב-' + monthLimit.label);
+      dateBtn.classList.toggle('on', !!ok);
+      return;
+    }
     if (!dateInput.value) dateInput.value = isoToday();   // a cleared picker means today
     var custom = dateInput.value !== isoToday();
     dateBtn.textContent = '📅 ' + (custom ? heDate(dateInput.value) : 'היום');
     dateBtn.classList.toggle('on', custom);
   }
+  function openPicker(){
+    dateInput.classList.remove('hidden');
+    try { dateInput.showPicker(); } catch(e){ /* needs a gesture on some browsers; the field is visible anyway */ }
+  }
   function resetDate(){
+    if (monthLimit){
+      dateInput.value = '';            // the limit stays; the day is picked again, never kept
+      openPicker();
+      refreshDateBtn();
+      return;
+    }
     dateInput.value = isoToday();      // recomputed, so an app left open past midnight is right
     dateInput.classList.add('hidden');
     refreshDateBtn();
+  }
+  function setMonthLimit(m, y){
+    var last = new Date(y, m, 0).getDate();
+    var mm = ('0' + m).slice(-2);
+    monthLimit = { min: y + '-' + mm + '-01', max: y + '-' + mm + '-' + ('0' + last).slice(-2), label: mm + '/' + y };
+    dateInput.min = monthLimit.min;
+    dateInput.max = monthLimit.max;
+    resetDate();
   }
   dateBtn.addEventListener('click', function(){
     var wasHidden = dateInput.classList.contains('hidden');
     dateInput.classList.toggle('hidden', !wasHidden);
     if (wasHidden){
-      if (!dateInput.value) dateInput.value = isoToday();
+      if (!dateInput.value && !monthLimit) dateInput.value = isoToday();
       try { dateInput.showPicker(); } catch(e){ dateInput.focus(); }
     }
   });
-  dateInput.addEventListener('change', refreshDateBtn);
+  dateInput.addEventListener('change', function(){ refreshDateBtn(); if (incomeForm) incomeForm.refresh(); });
   resetDate();
 
   // Tweak A — fill אופן תשלום from דרך only when method is empty; never overwrite.
@@ -386,8 +421,12 @@
     }
   });
 
+  // Sticky דרך / אופן תשלום: set when the page is opened from a דרישת תשלום, so the
+  // reset after a save keeps them and another row for the same demand follows at once.
+  var sticky = null;   // { payer, method } or null
   var incomeForm = setupForm({
     formId:'form-income', amountId:'i-amount', nameId:'i-name', statusId:'i-status',
+    extraValid: dateInLimit,
     build: function(){
       var amount = parseFloat(document.getElementById('i-amount').value);
       var name = document.getElementById('i-name').value.trim();
@@ -402,11 +441,15 @@
       // Only a date the user actually changed is sent; "today" is left to the
       // server clock, which keeps the time of day and so the order within a day.
       var picked = dateInput.value;
-      if (picked && picked !== isoToday()) payload.date = picked + 'T12:00:00';
+      if (picked && (monthLimit || picked !== isoToday())) payload.date = picked + 'T12:00:00';
+      if (sticky){ sticky.payer = payload.payer; sticky.method = payload.method; }
       return payload;
     },
     remember: function(p){ addToList('fin_payers', p.payer); addToList('fin_methods', p.method); },
-    afterReset: resetDate
+    afterReset: function(){
+      resetDate();
+      if (sticky){ payerInput.value = sticky.payer; methodInput.value = sticky.method; }
+    }
   });
 
   // ---- in-app nav (relative, same-origin, stays standalone/full-screen) ----
@@ -460,9 +503,37 @@
   }
 
   // mode: window.FIN_TYPE (entry pages) -> ?type= -> chooser
-  var type = window.FIN_TYPE || new URLSearchParams(location.search).get('type');
+  var query = new URLSearchParams(location.search);
+  var type = window.FIN_TYPE || query.get('type');
   refreshDatalists();
   show(type === 'expense' ? 'expense' : type === 'income' ? 'income' : 'chooser');
+
+  // ---- income opened from a דרישת תשלום (payment.js "add income" shortcut) ----
+  // ?payer=&ch=&m=&y=&from=pay. דרך is prefilled and אופן תשלום follows the PAYER_METHOD
+  // rule; the month decides the date: the current month behaves as today, any other
+  // month bounds the picker and waits for a chosen day. No query = the page as always.
+  if (type === 'income' && (query.get('payer') || query.get('from') === 'pay')){
+    var qPayer = (query.get('payer') || '').trim();
+    var qM = parseInt(query.get('m'), 10), qY = parseInt(query.get('y'), 10);
+    if (qPayer){
+      payerInput.value = qPayer;
+      maybeFillMethod();
+      sticky = { payer: payerInput.value, method: methodInput.value };
+    }
+    if (qM >= 1 && qM <= 12 && qY > 2000){
+      var t = new Date();
+      if (qM !== t.getMonth() + 1 || qY !== t.getFullYear()) setMonthLimit(qM, qY);
+    }
+    if (query.get('from') === 'pay'){
+      var back = document.getElementById('nav-pay');
+      back.setAttribute('href', (window.FIN_TYPE ? '../' : './') + '?open=pay'
+        + '&ch=' + encodeURIComponent(query.get('ch') || '')
+        + '&m=' + encodeURIComponent(query.get('m') || '')
+        + '&y=' + encodeURIComponent(query.get('y') || ''));
+      back.hidden = false;
+    }
+    incomeForm.refresh();
+  }
   if (!hasSettings()) openSettings();
 
   // ---- database section (lazy: only fetch db.js when first entered) ----
@@ -483,17 +554,25 @@
 
   // ---- payment-request section (lazy: only fetch payment.js when first tapped) ----
   // Same pattern as the database section above — keeps the main screen lean.
+  // openPay(arg): arg is passed to FinPay.open — undefined from the button, {channel,
+  // month, year} when the root is opened with ?open=pay (the income page's way back).
+  function openPay(arg){
+    if (window.FinPay){ window.FinPay.open(arg); return; }
+    var base = window.FIN_TYPE ? '../' : './';
+    var s = document.createElement('script');
+    s.src = base + 'payment.js';
+    s.onload  = function(){ if (window.FinPay) window.FinPay.open(arg); };
+    s.onerror = function(){ alert('טעינת דרישת התשלום נכשלה — בדוק חיבור'); };
+    document.head.appendChild(s);
+  }
   var payBtn = document.getElementById('c-pay');
   if (payBtn){
-    payBtn.addEventListener('click', function(){
-      if (window.FinPay){ window.FinPay.open(); return; }
-      var base = window.FIN_TYPE ? '../' : './';
-      var s = document.createElement('script');
-      s.src = base + 'payment.js';
-      s.onload  = function(){ if (window.FinPay) window.FinPay.open(); };
-      s.onerror = function(){ alert('טעינת דרישת התשלום נכשלה — בדוק חיבור'); };
-      document.head.appendChild(s);
-    });
+    payBtn.addEventListener('click', function(){ openPay(); });
+  }
+  if (!window.FIN_TYPE && query.get('open') === 'pay'){
+    openPay({ channel: query.get('ch') || '', month: query.get('m'), year: query.get('y') });
+    // Drop the query so a reload or "חזרה" lands on the plain chooser, not back in the demand.
+    try { history.replaceState(null, '', location.pathname); } catch(e){}
   }
 
   // ---- receipts section (lazy: only fetch receipts.js when first tapped) ----
