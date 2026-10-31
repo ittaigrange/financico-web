@@ -61,8 +61,10 @@
     '      <label for="i-amount">סכום (₪)</label>',
     '      <input id="i-amount" class="amount" type="number" inputmode="decimal" min="0" step="any" required>',
     '      <div class="datepick" id="i-datepick">',
-    '        <button type="button" class="date-btn" id="i-date-btn">📅 היום</button>',
-    '        <input type="date" id="i-date" class="hidden">',
+    '        <span class="date-wrap">',
+    '          <span class="date-btn" id="i-date-btn">📅 היום</span>',
+    '          <input type="date" id="i-date" aria-label="תאריך">',
+    '        </span>',
     '      </div>',
     '      <label for="i-name">שם הכנסה</label>',
     '      <input id="i-name" type="text" required>',
@@ -349,19 +351,10 @@
     dateBtn.textContent = '📅 ' + (custom ? heDate(dateInput.value) : 'היום');
     dateBtn.classList.toggle('on', custom);
   }
-  function openPicker(){
-    dateInput.classList.remove('hidden');
-    try { dateInput.showPicker(); } catch(e){ /* needs a gesture on some browsers; the field is visible anyway */ }
-  }
   function resetDate(){
-    if (monthLimit){
-      dateInput.value = '';            // the limit stays; the day is picked again, never kept
-      openPicker();
-      refreshDateBtn();
-      return;
-    }
-    dateInput.value = isoToday();      // recomputed, so an app left open past midnight is right
-    dateInput.classList.add('hidden');
+    // Under a month limit the day is picked again, never kept (the pill asks for it);
+    // otherwise today, recomputed so an app left open past midnight is right.
+    dateInput.value = monthLimit ? '' : isoToday();
     refreshDateBtn();
   }
   function setMonthLimit(m, y){
@@ -372,12 +365,14 @@
     dateInput.max = monthLimit.max;
     resetDate();
   }
-  dateBtn.addEventListener('click', function(){
-    var wasHidden = dateInput.classList.contains('hidden');
-    dateInput.classList.toggle('hidden', !wasHidden);
-    if (wasHidden){
-      if (!dateInput.value && !monthLimit) dateInput.value = isoToday();
-      try { dateInput.showPicker(); } catch(e){ dateInput.focus(); }
+  // The real date input lies invisibly over the 📅 pill, so the tap lands on the input
+  // itself and the phone opens its own calendar: one tap, and the pick sticks. (It used
+  // to be a hidden field un-hidden and opened by script on the same tap; on the phone the
+  // first pick was lost and the date fell back to today.) A mouse click on a date field
+  // does not open the calendar by itself, so on a desktop the script opens it.
+  dateInput.addEventListener('click', function(){
+    if (window.matchMedia && window.matchMedia('(pointer: fine)').matches){
+      try { dateInput.showPicker(); } catch(e){}
     }
   });
   dateInput.addEventListener('change', function(){ refreshDateBtn(); if (incomeForm) incomeForm.refresh(); });
