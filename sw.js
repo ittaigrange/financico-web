@@ -1,15 +1,10 @@
-  // Navigations ignore the query string: income/?payer=...&from=pay and ./?open=pay
-  // are the cached pages with parameters, so they open offline like the plain ones.
-  var opts = e.request.mode === 'navigate' ? { ignoreSearch: true } : undefined;
-  e.respondWith(
-    caches.match(e.request, opts).then(function (r) { return r || fetch(e.request); })
-  );// Financico service worker — caches the app shell so it opens offline.
+// Financico service worker — caches the app shell so it opens offline.
 // It deliberately ignores POSTs and cross-origin requests, so the entry
 // submission to the Apps Script endpoint always goes straight to the network.
 //
 // Bump CACHE on every shell change so phones drop the stale version.
 
-var CACHE = 'financico-v23';
+var CACHE = 'financico-v24';
 var ASSETS = [
   './',
   './index.html',
