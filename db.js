@@ -4,9 +4,12 @@
    endpoint/token from localStorage (same keys as app.js), renders its own
    full-screen view over the main app. Rows open into an edit view (updateRow).
 
-   Delete (expense list): rows that carry a מזהה get a checkbox; a small 🗑 in the
-   header deletes every checked row after one confirm (deleteRows — expense only,
-   matched by מזהה, rows removed from the sheet outright).
+   Delete (both lists): rows that carry a מזהה get a checkbox; a small 🗑 in the
+   header deletes every checked row after one confirm (deleteRows, matched by מזהה,
+   rows removed from the sheet outright). On the income list a marked row that
+   already carries a receipt refuses the WHOLE delete with a message naming it
+   (the receipt is cancelled by a credit note in SUMIT, never by dropping the row);
+   the server checks the same thing again and answers has_receipt.
 
    Views: home (three tiles) -> list (income | expense). Back from a list
    returns to home; back from home returns to the main logging app.
@@ -151,7 +154,7 @@
     '.db-trash .n{position:absolute;top:-5px;left:-5px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#dc2626;color:#fff;font-size:11px;font-weight:800;line-height:18px;box-sizing:border-box}',
     '.db-row.del{border-color:#dc2626;background:#fef2f2}',
     '.r-sel.r-delsel{accent-color:#dc2626}',
-    '.db-delmsg{color:var(--err);font-size:14px;font-weight:600;margin:0 2px 10px}'
+    '.db-delmsg{color:var(--err);font-size:14px;font-weight:600;margin:0 2px 10px;white-space:pre-line}'
   ].join('');
   var PAY_METHODS = ['העברה בנקאית', 'Bit', 'מזומן', 'אשראי'];   // same closed list as backend/Sumit.gs
   var styleEl = document.createElement('style');
@@ -289,9 +292,9 @@
 
   // ---- row renderers (inner = the row's content; html = inner wrapped in the
   // tappable card carrying data-idx so a saved edit can refresh it in place) ----
-  // An income row can go on a receipt when it has a מזהה and no receipt yet.
-  function selectable(r) {
-    return !!(r.id && String(r.id).trim() !== '' && !r.receiptId && !r.receiptNumber);
+  // An income row already on a receipt: never deleted here, never on a second receipt.
+  function receipted(r) {
+    return !!(r.receiptId || r.receiptNumber);
   }
   function receiptBadge(r) {
     if (!r.receiptNumber) return '';
@@ -299,14 +302,14 @@
     return '<span class="badge rcpt">' + (r.receiptUrl
       ? '<a href="' + esc(r.receiptUrl) + '" target="_blank" rel="noopener">' + label + '</a>' : label) + '</span>';
   }
-  // An expense row can be marked for deletion when it has a מזהה (imported rows have
-  // none, and the server matches by מזהה only).
+  // A row can be marked (income: for a receipt or deletion; expense: for deletion)
+  // when it has a מזהה — imported rows have none, and the server matches by מזהה only.
   function deletable(r) {
     return !!(r.id && String(r.id).trim() !== '');
   }
   function rowInner(kind, r) {
-    var check = (kind === 'income' && selectable(r))
-      ? '<input type="checkbox" class="r-sel" aria-label="בחר לקבלה"' + (selected[r.id] ? ' checked' : '') + '>'
+    var check = (kind === 'income' && deletable(r))
+      ? '<input type="checkbox" class="r-sel" aria-label="סמן לקבלה או למחיקה"' + (selected[r.id] ? ' checked' : '') + '>'
       : (kind === 'expense' && deletable(r))
       ? '<input type="checkbox" class="r-sel r-delsel" aria-label="סמן למחיקה"' + (selected[r.id] ? ' checked' : '') + '>'
       : '';
@@ -456,6 +459,7 @@
   }
   // '' when the selection can go on one receipt, else the reason it cannot.
   function selectionProblem(rows) {
+    if (rows.some(receipted)) return 'נבחרה שורה שכבר הופקה לה קבלה — אין להפיק לה קבלה נוספת (אפשר רק למחוק שורות בלי קבלה)';
     var n30 = rows.filter(function (r) { return r.method === '+30'; }).length;
     if (n30 > 0 && n30 < rows.length) return 'בחירה מעורבת: שורות +30 ושורות ששולמו ישירות — הפק קבלה נפרדת לכל סוג';
     return '';
@@ -478,14 +482,14 @@
     renderTrash();
   }
 
-  // ---- delete (expense list) ----------------------------------------------
-  // The 🗑 lives in the header and shows only on the expense list; it is enabled
-  // once at least one row is marked, and carries the count.
+  // ---- delete (both lists) ------------------------------------------------
+  // The 🗑 lives in the header and shows on either list; it is enabled once at
+  // least one row is marked, and carries the count.
   function markedRows() {
-    return currentKind === 'expense' ? currentRows.filter(function (r) { return selected[r.id]; }) : [];
+    return view === 'list' && currentKind ? selectedRows() : [];
   }
   function renderTrash() {
-    var onList = view === 'list' && currentKind === 'expense';
+    var onList = view === 'list' && !!currentKind;
     trashEl.classList.toggle('hidden', !onList);
     var n = onList ? markedRows().length : 0;
     trashEl.disabled = n === 0 || deleting;
@@ -495,16 +499,32 @@
     delMsgEl.textContent = msg || '';
     delMsgEl.classList.toggle('hidden', !msg);
   }
+  // The refusal shown when a marked income row already carries a receipt.
+  function receiptRefusal(rows) {
+    var names = rows.map(function (r) {
+      return '• ' + (r.name || 'ללא שם') + ' · ' + String(r.amount) + ' ₪ · ' + (r.date || '')
+        + (r.receiptNumber ? ' · קבלה #' + r.receiptNumber : '');
+    }).join('\n');
+    return (rows.length === 1 ? 'לשורה הזו הופקה קבלה — יש לבטל בזיכוי ב-SUMIT:' : 'לשורות האלה הופקה קבלה — יש לבטל בזיכוי ב-SUMIT:')
+      + '\n' + names + '\nשום שורה לא נמחקה.';
+  }
   trashEl.addEventListener('click', function () {
+    var kind = currentKind;
     var rows = markedRows();
     if (!rows.length || deleting) return;
+    if (kind === 'income') {
+      var withReceipt = rows.filter(receipted);
+      if (withReceipt.length) { setDelMsg(receiptRefusal(withReceipt)); return; }
+    }
     var total = 0;
     rows.forEach(function (r) { total += Number(r.amount) || 0; });
     var list = rows.slice(0, 8).map(function (r) {
       return '• ' + (r.name || 'ללא שם') + ' · ' + String(r.amount) + ' ₪ · ' + (r.date || '');
     }).join('\n') + (rows.length > 8 ? '\n… ועוד ' + (rows.length - 8) : '');
     var photos = rows.filter(function (r) { return r.receipt; }).length;
-    var q = (rows.length === 1 ? 'למחוק הוצאה אחת?' : 'למחוק ' + rows.length + ' הוצאות?')
+    var q = (kind === 'income'
+        ? (rows.length === 1 ? 'למחוק הכנסה אחת?' : 'למחוק ' + rows.length + ' הכנסות?')
+        : (rows.length === 1 ? 'למחוק הוצאה אחת?' : 'למחוק ' + rows.length + ' הוצאות?'))
       + '\nסה"כ ' + total.toLocaleString('he-IL', { maximumFractionDigits: 2 }) + ' ₪\n\n' + list
       + '\n\nהשורות יימחקו מהגיליון.' + (photos ? ' תמונות הקבלה יועברו לאשפה.' : '');
     if (!confirm(q)) return;
@@ -516,9 +536,17 @@
     Array.prototype.forEach.call(rowsEl.querySelectorAll('.db-row'), function (el) {
       if (selected[el.getAttribute('data-id')]) el.style.opacity = '.45';
     });
-    postAction({ token: token(), action: 'deleteRows', sheet: 'expense', ids: ids })
+    postAction({ token: token(), action: 'deleteRows', sheet: kind, ids: ids })
       .then(function (r) {
         deleting = false;
+        if (r && r.reason === 'has_receipt' && Array.isArray(r.receipted)) {
+          // the sheet knows a receipt the list did not: name those rows, delete nothing
+          var byId = {};
+          currentRows.forEach(function (x) { byId[String(x.id)] = x; });
+          setDelMsg(receiptRefusal(r.receipted.map(function (id) { return byId[String(id)] || { name: 'מזהה ' + id, amount: '', date: '' }; })));
+          renderRows(); renderTrash();
+          return;
+        }
         if (!r || !r.ok) {
           setDelMsg('המחיקה נכשלה — שום שורה לא נמחקה' + (r && (r.reason || r.error) ? ' (' + (r.reason || r.error) + ')' : ''));
           renderRows(); renderTrash();
@@ -529,15 +557,16 @@
         (r.deleted || []).concat(r.notFound || []).forEach(function (id) { gone[String(id)] = true; });
         currentRows = currentRows.filter(function (x) { return !gone[String(x.id)]; });
         Object.keys(gone).forEach(function (id) { delete selected[id]; });
-        if (currentKind !== 'expense') return;               // user left the list meanwhile
+        if (currentKind !== kind) return;                    // user left the list meanwhile
         if (currentRows.length === 0) { rowsEl.innerHTML = ''; setState('empty'); }
         else renderRows();
+        renderSelBar();
         renderTrash();
       })
       .catch(function () {
         deleting = false;
         setDelMsg('אין חיבור — ייתכן שהמחיקה לא הושלמה. טוען מחדש…');
-        openListKeepMsg('expense');
+        openListKeepMsg(kind);
       });
   });
   // After a lost answer the truth is on the sheet: reload the list, keep the note.
