@@ -26,7 +26,16 @@
    issueReceipt({rowIds, lines, customer, payment}). The server writes the
    receipt onto the rows, the customer back where empty and the lines back as
    issued. A selection mixing +30 rows with direct-paid rows is refused with a
-   message. */
+   message.
+
+   Payment demand for marked rows: the same action bar carries "דרישת תשלום" for
+   any customer outside the three monthly channels. The modal lists the marked
+   rows, asks for customer name + email (pre-filled from the rows' לקוח / מייל
+   לקוח, else from the newest other income of the same דרך), previews the
+   חשבון עסקה and sends issueRowsDoc({rowIds, customer, reissue}). The server
+   mails the PDF, logs it in מסמכים and stamps the rows (מס׳ דרישה + customer);
+   the list then shows a "דרישה #" badge. Rows already on a receipt are refused;
+   rows already on a demand warn first and go out again only as a re-issue. */
 (function () {
   "use strict";
   if (window.FinDB) return;              // guard: load + init exactly once
@@ -103,6 +112,13 @@
     '.db-selbar .sum .err{color:var(--err);font-weight:600}',
     '.db-selbar button{padding:12px 16px;font-size:16px;font-weight:700;color:#fff;border:0;border-radius:12px;cursor:pointer;background:#1d4ed8;font-family:inherit;white-space:nowrap}',
     '.db-selbar button:disabled{opacity:.45;cursor:default}',
+    // two actions on the bar: the sum takes its own line, the buttons share the next
+    '.db-selbar{flex-wrap:wrap}.db-selbar .sum{flex-basis:100%}.db-selbar button{flex:1;padding:12px 8px}',
+    '.db-selbar button.dmd{background:#3a531c}',
+    '.badge.dmd{background:#ecf3dc;color:#3a531c}',
+    '.badge.dmd + .badge.rcpt{margin-inline-start:0}',
+    '.db-send.dmd{background:#3a531c}',
+    '.db-hint{font-size:12px;color:var(--muted);margin:4px 2px 0}',
     '.db-modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}',
     '.db-sheet{width:100%;max-width:480px;max-height:92vh;overflow-y:auto;background:var(--bg);border-radius:18px 18px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom))}',
     '.db-sheet h3{margin:0 0 12px;font-size:19px}',
@@ -183,7 +199,7 @@
     '    <div class="db-count hidden" id="db-count"></div>',
     '    <div class="db-delmsg hidden" id="db-delmsg"></div>',
     '    <div class="db-rows" id="db-rows"></div>',
-    '    <div class="db-selbar hidden" id="db-selbar"><div class="sum" id="db-selsum"></div><button type="button" id="db-selgo">הפק קבלה</button></div>',
+    '    <div class="db-selbar hidden" id="db-selbar"><div class="sum" id="db-selsum"></div><button type="button" id="db-seldemand" class="dmd">דרישת תשלום</button><button type="button" id="db-selgo">הפק קבלה</button></div>',
     '  </section>',
     '</div>',
     '<div class="db-detail hidden" id="db-detail">',
@@ -209,6 +225,7 @@
   var selBarEl = screen.querySelector('#db-selbar');
   var selSumEl = screen.querySelector('#db-selsum');
   var selGoEl  = screen.querySelector('#db-selgo');
+  var selDemandEl = screen.querySelector('#db-seldemand');
   var trashEl  = screen.querySelector('#db-trash');
   var delMsgEl = screen.querySelector('#db-delmsg');
   var detailEl = screen.querySelector('#db-detail');
@@ -302,6 +319,13 @@
     return '<span class="badge rcpt">' + (r.receiptUrl
       ? '<a href="' + esc(r.receiptUrl) + '" target="_blank" rel="noopener">' + label + '</a>' : label) + '</span>';
   }
+  // An income row that already went out on a payment demand (issueRowsDoc).
+  function demanded(r) {
+    return String(r.demandNumber == null ? '' : r.demandNumber).trim() !== '';
+  }
+  function demandBadge(r) {
+    return demanded(r) ? '<span class="badge dmd">דרישה #' + esc(r.demandNumber) + '</span>' : '';
+  }
   // A row can be marked (income: for a receipt or deletion; expense: for deletion)
   // when it has a מזהה — imported rows have none, and the server matches by מזהה only.
   function deletable(r) {
@@ -309,7 +333,7 @@
   }
   function rowInner(kind, r) {
     var check = (kind === 'income' && deletable(r))
-      ? '<input type="checkbox" class="r-sel" aria-label="סמן לקבלה או למחיקה"' + (selected[r.id] ? ' checked' : '') + '>'
+      ? '<input type="checkbox" class="r-sel" aria-label="סמן לקבלה, לדרישת תשלום או למחיקה"' + (selected[r.id] ? ' checked' : '') + '>'
       : (kind === 'expense' && deletable(r))
       ? '<input type="checkbox" class="r-sel r-delsel" aria-label="סמן למחיקה"' + (selected[r.id] ? ' checked' : '') + '>'
       : '';
@@ -319,7 +343,7 @@
       return head + '<div class="r-sub"><span class="r-date">' + esc(r.date) + '</span>'
         + (r.via ? '<span class="r-via">' + esc(r.via) + '</span>' : '')
         + (r.method === '+30' ? '<span class="r-via">+30</span>' : '')
-        + receiptBadge(r) + '</div>';
+        + demandBadge(r) + receiptBadge(r) + '</div>';
     }
     var badge = r.recognized
       ? '<span class="badge ok">עסקי מוכר</span>'
@@ -464,6 +488,10 @@
     if (n30 > 0 && n30 < rows.length) return 'בחירה מעורבת: שורות +30 ושורות ששולמו ישירות — הפק קבלה נפרדת לכל סוג';
     return '';
   }
+  // '' when a payment demand can go out for the selection, else the reason it cannot.
+  function demandProblem(rows) {
+    return rows.some(receipted) ? 'נבחרה שורה שכבר הופקה לה קבלה' : '';
+  }
   function renderSelBar() {
     var rows = currentKind === 'income' ? selectedRows() : [];
     if (!rows.length) { selBarEl.classList.add('hidden'); return; }
@@ -473,6 +501,7 @@
     selSumEl.innerHTML = 'נבחרו <b>' + rows.length + '</b> · סה"כ <b>' + money(total) + '</b>'
       + (why ? '<br><span class="err">' + esc(why) + '</span>' : '');
     selGoEl.disabled = !!why;
+    selDemandEl.disabled = !!demandProblem(rows);
     selBarEl.classList.remove('hidden');
   }
   function toggleSelect(id, on, rowEl) {
@@ -580,6 +609,11 @@
     if (!rows.length || selectionProblem(rows)) return;
     openReceiptModal(rows);
   });
+  selDemandEl.addEventListener('click', function () {
+    var rows = selectedRows();
+    if (!rows.length || demandProblem(rows)) return;
+    openDemandModal(rows);
+  });
 
   // ---- wiring ----
   homeEl.querySelector('[data-kind="income"]').addEventListener('click', function () { openList('income'); });
@@ -668,6 +702,7 @@
       h += '<label for="dd-via">דרך</label><input id="dd-via" type="text" list="dl-payers" value="' + esc(row.via) + '">';
       h += '<label for="dd-cust">לקוח (לקבלה)</label><input id="dd-cust" type="text" value="' + esc(row.customer) + '">';
       h += '<label for="dd-cemail">מייל לקוח</label><input id="dd-cemail" type="email" dir="ltr" inputmode="email" value="' + esc(row.customerEmail) + '">';
+      if (demanded(row)) h += roField('דרישת תשלום', '#' + row.demandNumber);
       if (row.receiptNumber) h += roField('קבלה', '#' + row.receiptNumber);
     } else {
       h += '<label for="dd-name">שם</label><input id="dd-name" type="text" value="' + esc(row.name) + '">';
@@ -1131,6 +1166,153 @@
         })
         .catch(function () {
           status('אין חיבור — הקש שוב (לא תופק קבלה כפולה)', 'err');
+          sendBtn.disabled = false;
+        });
+    });
+  }
+
+  // ---- payment-demand modal (marked rows, any customer) --------------------
+  // The customer for a demand: the marked rows' own לקוח / מייל לקוח first; else
+  // the newest OTHER income of the same דרך that carries an email — the mail is
+  // typed once per customer and offered from then on. { name, email, from }.
+  function demandCustomer(rows) {
+    var own = { name: firstOf(rows, 'customer'), email: firstOf(rows, 'customerEmail', isEmail), from: '' };
+    if (own.email) return own;
+    var vias = {}, marked = {};
+    rows.forEach(function (r) { marked[r.id] = true; var v = String(r.via || '').trim(); if (v) vias[v] = true; });
+    if (Object.keys(vias).length !== 1) return own;          // no דרך, or several: nothing to go by
+    var best = null;
+    currentRows.forEach(function (r) {
+      if (marked[r.id] || !vias[String(r.via || '').trim()] || !isEmail(String(r.customerEmail || '').trim())) return;
+      if (!best || dateKey(r.date) > dateKey(best.date)) best = r;
+    });
+    if (!best) return own;
+    return { name: own.name || String(best.customer || '').trim(),
+             email: String(best.customerEmail).trim(), from: String(best.via).trim() };
+  }
+  // The חשבון עסקה as the PDF will show it: one line per row, quantity 1.
+  function demandPreviewHtml(o) {
+    var rows = o.lines.map(function (ln) {
+      return '<tr><td>' + esc(ln.name) + '</td><td class="n">' + esc(ln.date) + '</td>'
+        + '<td class="n">1</td><td class="n">' + money(ln.amount) + '</td></tr>';
+    }).join('');
+    return '<p class="db-pv-note">כך תיראה דרישת התשלום (בקירוב). בדוק לפני האישור — היא תישלח ללקוח במייל.</p>'
+      + '<div class="db-pv">'
+      + '<div class="db-pv-title"><b>חשבון עסקה</b><span>מספר יינתן בהפקה</span></div>'
+      + '<div class="db-pv-meta">'
+      + '<div><small>עבור</small>' + esc(o.customer.name) + '</div>'
+      + '<div><small>נשלח אל</small><span dir="ltr">' + esc(o.customer.email) + '</span></div>'
+      + '</div>'
+      + '<table class="db-pv-lines"><thead><tr><th>שם פריט</th><th>תאריך</th><th>כמות</th><th>מחיר</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + '<div class="db-pv-total"><span>סה"כ לתשלום</span><b>' + money(o.total) + '</b></div>'
+      + '</div>';
+  }
+
+  function openDemandModal(rows) {
+    // oldest first, as the PDF lists them
+    rows = rows.slice().sort(function (a, b) { return dateKey(a.date) - dateKey(b.date); });
+    var total = 0;
+    rows.forEach(function (r) { total += Number(r.amount) || 0; });
+    var cust = demandCustomer(rows);
+    var again = rows.filter(demanded);
+    var modal = document.createElement('div');
+    modal.className = 'db-modal';
+    modal.innerHTML = [
+      '<div class="db-sheet">',
+      '  <h3>דרישת תשלום — ' + (rows.length === 1 ? 'שורה אחת' : rows.length + ' שורות') + '</h3>',
+      '  <div class="db-lines">' + rows.map(function (r) {
+        return '<div class="db-line"><div class="db-line-head"><span>' + esc(r.name) + ' (' + esc(r.date) + ')</span><b>'
+          + money(r.amount) + '</b></div></div>';
+      }).join('') + '</div>',
+      '  <dl>',
+      '    <dt>סה"כ</dt><dd>' + money(total) + '</dd>',
+      '  </dl>',
+      fieldHtml('db-dcust', 'לקוח (יופיע בדרישה תחת "עבור")', 'text', cust.name),
+      fieldHtml('db-demail', 'מייל לקוח', 'email', cust.email, ' dir="ltr" inputmode="email"'),
+      cust.from ? '  <p class="db-hint">המייל מולא לפי הכנסה קודמת של ' + esc(cust.from) + ' — אפשר לשנות.</p>' : '',
+      again.length ? '  <p class="db-warn">שים לב: ' + (again.length === rows.length ? 'לשורות האלה' : 'לחלק מהשורות')
+        + ' כבר נשלחה דרישת תשלום (#' + esc(again[0].demandNumber) + '). שליחה עכשיו תפיק דרישה חדשה במספר חדש.</p>' : '',
+      '  <p class="db-warn">דרישת התשלום תישלח ללקוח במייל ותירשם במסמכים. הלקוח והמייל יישמרו על השורות.</p>',
+      '  <div class="db-preview" id="db-dpreview"></div>',
+      '  <div class="db-modal-status" id="db-dstatus"></div>',
+      '  <div class="db-acts">',
+      '    <button type="button" class="db-send dmd">תצוגה מקדימה</button>',
+      '    <button type="button" class="db-cancel">בטל</button>',
+      '  </div>',
+      '</div>'
+    ].join('\n');
+    screen.appendChild(modal);
+
+    var sheet     = modal.querySelector('.db-sheet');
+    var sendBtn   = modal.querySelector('.db-send');
+    var cancelBtn = modal.querySelector('.db-cancel');
+    var previewEl = modal.querySelector('#db-dpreview');
+    var statusEl  = modal.querySelector('#db-dstatus');
+    function status(msg, cls) { statusEl.className = 'db-modal-status' + (cls ? ' ' + cls : ''); statusEl.textContent = msg || ''; }
+    function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    function done() { close(); openList('income'); }   // redraw from the sheet: demand badges, customer written back
+
+    // Two steps, as on a receipt: preview first, the second tap sends.
+    var previewing = false, sent = false;
+    function leavePreview() {
+      sheet.classList.remove('previewing');
+      sendBtn.textContent = 'תצוגה מקדימה';
+      cancelBtn.textContent = 'בטל';
+      previewing = false;
+      status('');
+    }
+    cancelBtn.addEventListener('click', function () {
+      if (sent) done(); else if (previewing) leavePreview(); else close();
+    });
+
+    sendBtn.addEventListener('click', function () {
+      var name = modal.querySelector('#db-dcust').value.trim();
+      var mail = modal.querySelector('#db-demail').value.trim();
+      var why = !name ? 'חסר שם לקוח' : !isEmail(mail) ? 'חסר מייל ללקוח' : '';
+      if (why) { if (previewing) leavePreview(); status(why, 'err'); return; }
+
+      if (!previewing) {
+        previewEl.innerHTML = demandPreviewHtml({
+          lines: rows.map(function (r) {
+            return { name: r.name, date: String(r.date || '').slice(0, 5), amount: Number(r.amount) || 0 };
+          }),
+          total: total,
+          customer: { name: name, email: mail }
+        });
+        sheet.classList.add('previewing');
+        sendBtn.textContent = 'אשר ושלח';
+        cancelBtn.textContent = 'ערוך';
+        previewing = true;
+        status('');
+        sheet.scrollTop = 0;
+        return;
+      }
+
+      sendBtn.disabled = true;                 // no second submit while in flight
+      status('שולח דרישת תשלום…', '');
+      postAction({ token: token(), action: 'issueRowsDoc',
+                   rowIds: rows.map(function (r) { return String(r.id); }),
+                   customer: { name: name, email: mail }, reissue: again.length > 0 })
+        .then(function (r) {
+          if (r && r.ok) {
+            sent = true;
+            status('נשלחה דרישה #' + r.serial + ' אל ' + r.sentTo, 'ok');
+            sendBtn.classList.add('hidden');
+            cancelBtn.textContent = 'סגור';
+          } else if (r && r.reason === 'already_demanded') {
+            // the first try did go out and only its reply was lost: say so, send nothing more
+            sent = true;
+            status(r.userMessage, 'ok');
+            sendBtn.classList.add('hidden');
+            cancelBtn.textContent = 'סגור';
+          } else {
+            status((r && (r.userMessage || r.error)) || 'שליחת הדרישה נכשלה — נסה שוב', 'err');
+            sendBtn.disabled = false;
+          }
+        })
+        .catch(function () {
+          status('אין חיבור — הקש שוב (לא תישלח דרישה כפולה)', 'err');
           sendBtn.disabled = false;
         });
     });
